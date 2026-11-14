@@ -33,17 +33,21 @@ Total: 21 piezas (20 en MDF 15 mm — caben de sobra en medio tablero 1220 × 12
 
 ## Programas NC (`nc/`)
 
-Un `.nc` por pieza (G-code estándar: GRBL / Mach3 / LinuxCNC / UCCNC). Si una pieza tiene cantidad 2, se ejecuta el programa dos veces.
+Un `.nc` por pieza. **Formato copiado de un `.tap` real sacado de PowerMill con el post de la máquina (Chaoda):**
+`%` / `G90` / `T1` / `S…M3` al inicio, primer movimiento `G1…Z10.F500.M8`, código modal y compacto (`X1.376Z-.695F1000.`),
+sin comentarios, sin arcos G2/G3 (los taladros van en hélice con rectas), retracción `G0Z10.`, final `M9` / `M2`, saltos de línea CRLF.
+Si una pieza tiene cantidad 2, se ejecuta el programa dos veces.
 
 | Parámetro | Valor |
 |---|---|
-| Herramienta | fresa plana Ø6 mm (2 cortes; compresión ideal en MDF) |
-| Husillo | 18 000 rpm |
-| Avance XY / Z | 2000 / 400 mm/min |
+| Herramienta | T1 fresa plana Ø6 mm (2 cortes; compresión ideal en MDF) |
+| Husillo | S18000 (el `.tap` de referencia traía S1500: confirmar qué usa la máquina) |
+| Avance XY / Z | 1500 / 500 mm/min (referencia PowerMill: 1000 / 500) |
+| Altura seguridad | Z10 |
 | Pasada | 5 mm en MDF 15 (3 pasadas), 1.8 mm en 3 mm |
 | Profundidad | espesor + 0.3 mm (al tablero mártir) |
 | Puentes | 3–6 por pieza, 8 mm de ancho, 3 mm alto (1.2 en el sombrero) |
-| Origen | **X0 Y0 = esquina inferior izquierda de la pieza** (deja ≥10 mm de margen al borde del tablero) · **Z0 = cara superior del tablero** |
+| Origen | **X0 Y0 = esquina inferior izquierda de la pieza** (deja ≥10 mm de margen al borde del tablero) · **Z0 = cara superior del tablero** (igual que en PowerMill) |
 
 Orden dentro de cada programa: taladros (helicoidal) → marcado → cajeras → cortes interiores (con *dogbones* en las esquinas para que entre la pieza cuadrada) → contorno exterior en concordancia con puentes.
 

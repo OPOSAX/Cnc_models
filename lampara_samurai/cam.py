@@ -18,11 +18,11 @@ import geometria as G
 # ------------------------------------------------------------- parametros maquina
 TOOL_D = 6.0          # fresa plana 6 mm (2 cortes, compresion o upcut)
 R = TOOL_D / 2
-SPINDLE = 18000
-FEED = 2000           # mm/min XY
-PLUNGE = 400          # mm/min Z
-SAFE_Z = 5.0
-CLEAR_Z = 15.0
+SPINDLE = 18000       # rpm (el .tap de referencia de PowerMill traia S1500: revisar)
+FEED = 1500           # mm/min XY  (referencia PowerMill: 1000)
+PLUNGE = 500          # mm/min Z   (referencia PowerMill: 500)
+SAFE_Z = 10.0         # igual que el .tap de referencia (G0Z10.)
+CLEAR_Z = 10.0
 OVERCUT = 0.3         # pasar por debajo del tablero (martir)
 STEPDOWN = {15.0: 5.0, 3.0: 1.8}
 TAB_W = 8.0           # ancho del puente (material que queda)
@@ -31,33 +31,77 @@ STEPOVER = 0.45 * TOOL_D
 
 
 def f(v):
-    return f"{v:.3f}".rstrip("0").rstrip(".") if abs(v) > 1e-9 else "0"
+    """Formato PowerMill: 10. / -.5 / 1.376 / 0"""
+    v = round(v, 3)
+    if abs(v) < 5e-4:
+        return "0"
+    t = f"{v:.3f}".rstrip("0")
+    if t.startswith("0."):
+        t = t[1:]
+    elif t.startswith("-0."):
+        t = "-" + t[2:]
+    return t
 
 
 class NC:
+    """Escribe G-code modal y compacto, igual que el post de PowerMill de la maquina
+    (sin espacios, sin comentarios, sin arcos, ejes/G/F repetidos omitidos)."""
+
     def __init__(self):
         self.l = []
         self.z = None
+        self.st = dict(G=None, X=None, Y=None, Z=None, F=None)
+        self.first = True
 
     def __call__(self, s):
         self.l.append(s)
 
+    def move(self, g, x=None, y=None, z=None, feed=None):
+        out = ""
+        words = []
+        for k, v in (("X", x), ("Y", y), ("Z", z)):
+            if v is None:
+                continue
+            fv = f(v)
+            if self.st[k] != fv:
+                words.append(k + fv); self.st[k] = fv
+        if self.first:
+            # primer movimiento identico al de referencia: G1 X Y Z F500. M8
+            self.first = False
+            self(f"G1{''.join(words)}F{f(PLUNGE)}.M8".replace("..", "."))
+            self.st["G"], self.st["F"] = "G1", f(PLUNGE)
+            return
+        if not words:
+            return
+        gs = f"G{g}"
+        if self.st["G"] != gs:
+            out += gs; self.st["G"] = gs
+        out += "".join(words)
+        if g == 1 and feed is not None:
+            ff = f(feed)
+            if self.st["F"] != ff:
+                out += "F" + ff + ("." if "." not in ff else ""); self.st["F"] = ff
+        self(out)
+
     def rapid_xy(self, x, y):
-        if self.z is None or self.z < SAFE_Z:
-            self(f"G0 Z{f(SAFE_Z)}"); self.z = SAFE_Z
-        self(f"G0 X{f(x)} Y{f(y)}")
+        if self.z is None or self.z < SAFE_Z - 1e-6:
+            self.move(0, z=SAFE_Z); self.z = SAFE_Z
+        if self.first:
+            self.move(1, x=x, y=y, z=SAFE_Z)
+        else:
+            self.move(0, x=x, y=y)
 
     def plunge(self, z):
-        self(f"G1 Z{f(z)} F{PLUNGE}"); self.z = z
+        self.move(1, z=z, feed=PLUNGE); self.z = z
 
     def lin(self, x, y, z=None):
         if z is not None and abs(z - self.z) > 1e-6:
-            self(f"G1 X{f(x)} Y{f(y)} Z{f(z)} F{PLUNGE}"); self.z = z
+            self.move(1, x, y, z, feed=PLUNGE); self.z = z
         else:
-            self(f"G1 X{f(x)} Y{f(y)} F{FEED}")
+            self.move(1, x, y, feed=FEED)
 
     def retract(self):
-        self(f"G0 Z{f(SAFE_Z)}"); self.z = SAFE_Z
+        self.move(0, z=SAFE_Z); self.z = SAFE_Z
 
 
 def levels(depth, step):
@@ -126,11 +170,11 @@ def contour(nc, pts, depth, step, tabs=0, tab_h=0.0):
                 pa = a + (b - a) * (c0 / sl) if sl else a
                 pb = a + (b - a) * (c1 / sl) if sl else b
                 if abs(zt - nc.z) > 1e-6:
-                    nc(f"G1 Z{f(zt)} F{PLUNGE}"); nc.z = zt
+                    nc.plunge(zt)
                 nc.lin(pb[0], pb[1])
             s0 += sl
         if abs(nc.z - z) > 1e-6:
-            nc(f"G1 Z{f(z)} F{PLUNGE}"); nc.z = z
+            nc.plunge(z)
     nc.retract()
 
 
@@ -156,15 +200,23 @@ def pocket(nc, poly, depth, step):
 
 
 def drill(nc, x, y, d, depth, step):
+    """Helicoidal con segmentos rectos (sin G2/G3), 1 mm de bajada por vuelta."""
     rr = (d - TOOL_D) / 2
     nc.rapid_xy(x + rr, y); nc.plunge(0.5)
     if rr < 0.05:
         for z in levels(depth, 1.5):    # picoteo
             nc.plunge(z); nc.retract(); nc.plunge(z + 0.5)
         nc.retract(); return
-    for z in levels(depth, 1.0):        # helicoidal, 1 mm por vuelta
-        nc(f"G2 X{f(x + rr)} Y{f(y)} Z{f(z)} I{f(-rr)} J0 F{FEED // 2}"); nc.z = z
-    nc(f"G2 X{f(x + rr)} Y{f(y)} I{f(-rr)} J0 F{FEED // 2}")
+    nseg = 24
+    zc = 0.0
+    for z in levels(depth, 1.0) + [None]:
+        for k in range(1, nseg + 1):
+            a = -2 * math.pi * k / nseg          # sentido horario
+            zz = zc + (z - zc) * k / nseg if z is not None else zc
+            nc.move(1, x + rr * math.cos(a), y + rr * math.sin(a), zz, feed=FEED // 2)
+            nc.z = zz
+        if z is not None:
+            zc = z
     nc.retract()
 
 
@@ -185,24 +237,15 @@ def gen_piece(p, outdir_nc, outdir_dxf):
     depth = T + OVERCUT
     b = g["outline"].bounds
     nc = NC()
-    nc(f"( Lampara Samurai - {p.pid} {p.name} )")
-    nc(f"( Cantidad: {p.qty}  |  Material: {'MDF' if T == 15 else 'contrachapado flexible'} {T:g} mm  |  Acabado: {p.color} )")
-    nc(f"( Tamano pieza: {b[2]:.1f} x {b[3]:.1f} mm  -> tablero minimo {b[2] + 20:.0f} x {b[3] + 20:.0f} mm )")
-    nc(f"( Origen: X0 Y0 = esquina inf. izq. de la pieza (dejar 10 mm de margen), Z0 = cara superior del tablero )")
-    nc(f"( Herramienta: fresa plana D{TOOL_D:g} mm  S{SPINDLE}  F{FEED}  pasada {step:g} mm  sobrecorte {OVERCUT:g} mm )")
-    if p.note:
-        nc(f"( Nota: {p.note} )")
-    nc("G21 G90 G17 G94")
-    nc(f"G0 Z{f(CLEAR_Z)}")
-    nc(f"M3 S{SPINDLE}")
-    nc("G4 P3")
-    nc.z = CLEAR_Z
+    nc("%")
+    nc("G90")
+    nc("T1")
+    nc(f"S{SPINDLE}M3")
+    nc.z = SAFE_Z
     if g["circles"]:
-        nc("( --- Taladros --- )")
         for x, y, d in g["circles"]:
             drill(nc, x, y, d, depth, step)
     if g["engraves"]:
-        nc("( --- Marcado --- )")
         for ln, d in g["engraves"]:
             c = list(ln.coords)
             nc.rapid_xy(*c[0]); nc.plunge(0.5); nc.plunge(-d)
@@ -210,26 +253,22 @@ def gen_piece(p, outdir_nc, outdir_dxf):
                 nc.lin(*q)
             nc.retract()
     if g["pockets"]:
-        nc("( --- Cajeras --- )")
         for pk, d in g["pockets"]:
             pocket(nc, pk, d, 4.0)
     if g["holes"]:
-        nc("( --- Cortes interiores --- )")
         for h in g["holes"]:
             contour(nc, dogbone_path(h), depth, step, tabs=0)
-    nc("( --- Contorno exterior con puentes --- )")
     outer = g["outline"].buffer(R, resolution=16)
     pts = ring_pts(outer.exterior, ccw=False)            # horario = fresado en concordancia
     L = outer.exterior.length
     ntabs = int(min(6, max(3, round(L / 300))))
     contour(nc, pts, depth, step, tabs=ntabs, tab_h=TAB_H[T])
-    nc(f"G0 Z{f(CLEAR_Z)}")
-    nc("M5")
-    nc("G0 X0 Y0")
-    nc("M30")
+    nc.move(0, z=SAFE_Z)
+    nc("M9")
+    nc("M2")
     fn = f"{p.pid}_{p.name.split('(')[0].strip().lower().replace(' ', '_').replace('/', '-')}"
-    with open(os.path.join(outdir_nc, fn + ".nc"), "w") as fh:
-        fh.write("\n".join(nc.l) + "\n")
+    with open(os.path.join(outdir_nc, fn + ".nc"), "w", newline="") as fh:
+        fh.write("\r\n".join(nc.l) + "\r\n")          # CRLF como el .tap de PowerMill
 
     # DXF
     doc = ezdxf.new("R2010", setup=True); msp = doc.modelspace()

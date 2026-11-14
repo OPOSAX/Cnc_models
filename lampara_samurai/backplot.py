@@ -9,12 +9,15 @@ def parse(path):
     x = y = 0.0; z = 15.0
     segs = []  # (x0,y0,x1,y1,z,kind)
     zmin = 0
+    gm = 0
     for line in open(path):
         line = re.sub(r"\(.*?\)", "", line).strip()
         if not line:
             continue
         w = dict((m[0], float(m[1:])) for m in re.findall(r"[A-Z]-?[\d.]+", line))
-        g = int(w.get("G", -1)) if "G" in w else None
+        if "G" in w and int(w["G"]) in (0, 1, 2, 3):
+            gm = int(w["G"])
+        g = gm if any(k in w for k in "XYZ") else None
         nx, ny, nz = w.get("X", x), w.get("Y", y), w.get("Z", z)
         if g == 2:
             i, j = w["I"], w["J"]
