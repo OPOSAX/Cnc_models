@@ -33,21 +33,22 @@ Total: 21 piezas (20 en MDF 15 mm — caben de sobra en medio tablero 1220 × 12
 
 ## Programas NC (`nc/`)
 
-Un `.nc` por pieza. **Formato copiado de un `.tap` real sacado de PowerMill con el post de la máquina (Chaoda):**
-`%` / `G90` / `T1` / `S…M3` al inicio, primer movimiento `G1…Z10.F500.M8`, código modal y compacto (`X1.376Z-.695F1000.`),
-sin comentarios, sin arcos G2/G3 (los taladros van en hélice con rectas), retracción `G0Z10.`, final `M9` / `M2`, saltos de línea CRLF.
+Un `.nc` por pieza. **Formato copiado del ejemplo `.nc` que entrega el fabricante (Chaoda) para esta máquina:**
+números de línea `N`, palabras separadas por espacio, `S… M3` al inicio, primer movimiento `G0 G54 X… Y…`,
+código modal (`X-.865 Z284.`), avance entero (`F1500`), sin comentarios, sin arcos G2/G3 (los taladros van en hélice con rectas),
+final `G53 Z0` / `G0 M05` / `M30` / `%`, saltos de línea CRLF. No se usa el eje B (corte plano en 3 ejes).
 Si una pieza tiene cantidad 2, se ejecuta el programa dos veces.
 
 | Parámetro | Valor |
 |---|---|
 | Herramienta | T1 fresa plana Ø6 mm (2 cortes; compresión ideal en MDF) |
-| Husillo | S18000 (el `.tap` de referencia traía S1500: confirmar qué usa la máquina) |
-| Avance XY / Z | 1500 / 500 mm/min (referencia PowerMill: 1000 / 500) |
+| Husillo | S18000 (los ejemplos traen S1500: confirmar qué usa la máquina) |
+| Avance XY / Z | 1500 / 500 mm/min (ejemplo del fabricante: 5000 / 1000) |
 | Altura seguridad | Z10 |
 | Pasada | 5 mm en MDF 15 (3 pasadas), 1.8 mm en 3 mm |
 | Profundidad | espesor + 0.3 mm (al tablero mártir) |
 | Puentes | 3–6 por pieza, 8 mm de ancho, 3 mm alto (1.2 en el sombrero) |
-| Origen | **X0 Y0 = esquina inferior izquierda de la pieza** (deja ≥10 mm de margen al borde del tablero) · **Z0 = cara superior del tablero** (igual que en PowerMill) |
+| Origen | **X0 Y0 = esquina inferior izquierda de la pieza** (deja ≥10 mm de margen al borde del tablero) · **Z0 = cara superior del tablero**, todo en **G54** |
 
 Orden dentro de cada programa: taladros (helicoidal) → marcado → cajeras → cortes interiores (con *dogbones* en las esquinas para que entre la pieza cuadrada) → contorno exterior en concordancia con puentes.
 

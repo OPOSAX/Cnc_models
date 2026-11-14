@@ -21,7 +21,7 @@ R = TOOL_D / 2
 SPINDLE = 18000       # rpm (el .tap de referencia de PowerMill traia S1500: revisar)
 FEED = 1500           # mm/min XY  (referencia PowerMill: 1000)
 PLUNGE = 500          # mm/min Z   (referencia PowerMill: 500)
-SAFE_Z = 10.0         # igual que el .tap de referencia (G0Z10.)
+SAFE_Z = 10.0         # altura de seguridad sobre el tablero
 CLEAR_Z = 10.0
 OVERCUT = 0.3         # pasar por debajo del tablero (martir)
 STEPDOWN = {15.0: 5.0, 3.0: 1.8}
@@ -44,20 +44,24 @@ def f(v):
 
 
 class NC:
-    """Escribe G-code modal y compacto, igual que el post de PowerMill de la maquina
-    (sin espacios, sin comentarios, sin arcos, ejes/G/F repetidos omitidos)."""
+    """Escribe G-code con el estilo del ejemplo del fabricante (rough-1.nc, Chaoda):
+    numeros de linea N, palabras separadas por espacio, G54, codigo modal,
+    sin comentarios ni arcos, F entero, final G53 Z0 / M05 / M30 / %."""
 
     def __init__(self):
         self.l = []
+        self.n = 10
         self.z = None
         self.st = dict(G=None, X=None, Y=None, Z=None, F=None)
         self.first = True
 
-    def __call__(self, s):
-        self.l.append(s)
+    def __call__(self, s, numbered=True):
+        if numbered:
+            self.l.append(f"N{self.n} {s}"); self.n += 1
+        else:
+            self.l.append(s)
 
     def move(self, g, x=None, y=None, z=None, feed=None):
-        out = ""
         words = []
         for k, v in (("X", x), ("Y", y), ("Z", z)):
             if v is None:
@@ -65,31 +69,30 @@ class NC:
             fv = f(v)
             if self.st[k] != fv:
                 words.append(k + fv); self.st[k] = fv
-        if self.first:
-            # primer movimiento identico al de referencia: G1 X Y Z F500. M8
-            self.first = False
-            self(f"G1{''.join(words)}F{f(PLUNGE)}.M8".replace("..", "."))
-            self.st["G"], self.st["F"] = "G1", f(PLUNGE)
-            return
         if not words:
             return
+        out = []
         gs = f"G{g}"
-        if self.st["G"] != gs:
-            out += gs; self.st["G"] = gs
-        out += "".join(words)
+        if self.first:
+            # primer movimiento como el ejemplo: G0 G54 X.. Y..
+            self.first = False
+            out += [gs, "G54"]; self.st["G"] = gs
+        elif self.st["G"] != gs:
+            out.append(gs); self.st["G"] = gs
+        out += words
         if g == 1 and feed is not None:
-            ff = f(feed)
+            ff = str(int(round(feed)))
             if self.st["F"] != ff:
-                out += "F" + ff + ("." if "." not in ff else ""); self.st["F"] = ff
-        self(out)
+                out.append("F" + ff); self.st["F"] = ff
+        self(" ".join(out))
 
     def rapid_xy(self, x, y):
+        if self.first:                      # XY a la altura actual y luego bajar a Z seguridad
+            self.move(0, x=x, y=y); self.move(0, z=SAFE_Z); self.z = SAFE_Z
+            return
         if self.z is None or self.z < SAFE_Z - 1e-6:
             self.move(0, z=SAFE_Z); self.z = SAFE_Z
-        if self.first:
-            self.move(1, x=x, y=y, z=SAFE_Z)
-        else:
-            self.move(0, x=x, y=y)
+        self.move(0, x=x, y=y)
 
     def plunge(self, z):
         self.move(1, z=z, feed=PLUNGE); self.z = z
@@ -237,10 +240,8 @@ def gen_piece(p, outdir_nc, outdir_dxf):
     depth = T + OVERCUT
     b = g["outline"].bounds
     nc = NC()
-    nc("%")
     nc("G90")
-    nc("T1")
-    nc(f"S{SPINDLE}M3")
+    nc(f"S{SPINDLE} M3")
     nc.z = SAFE_Z
     if g["circles"]:
         for x, y, d in g["circles"]:
@@ -264,8 +265,10 @@ def gen_piece(p, outdir_nc, outdir_dxf):
     ntabs = int(min(6, max(3, round(L / 300))))
     contour(nc, pts, depth, step, tabs=ntabs, tab_h=TAB_H[T])
     nc.move(0, z=SAFE_Z)
-    nc("M9")
-    nc("M2")
+    nc("G53 Z0")
+    nc("G0 M05")
+    nc("M30")
+    nc("%", numbered=False)
     fn = f"{p.pid}_{p.name.split('(')[0].strip().lower().replace(' ', '_').replace('/', '-')}"
     with open(os.path.join(outdir_nc, fn + ".nc"), "w", newline="") as fh:
         fh.write("\r\n".join(nc.l) + "\r\n")          # CRLF como el .tap de PowerMill
