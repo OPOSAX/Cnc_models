@@ -536,6 +536,77 @@ if (section("Salida por bloques (programa de mas de 200.000 lineas)")) {
   check("bloques: formato del archivo unido", iss.length === 0, iss.slice(0, 3).join(" | "));
 }
 
+// ------------------------------------------------------------------ STL
+console.log("\nSTL");
+{
+  function stlBin(tris, extra) {
+    const b = new ArrayBuffer(84 + 50 * tris.length + (extra || 0)), d = new DataView(b);
+    d.setUint32(80, tris.length, true);
+    tris.forEach((t, i) => t.forEach((v, k) => d.setFloat32(84 + 50 * i + 12 + 4 * k, v, true)));
+    return b;
+  }
+  function stlAscii(tris, solidHeader) {
+    const s = (solidHeader || "solid t") + "\n" + tris.map((t) => "  facet normal 0 0 1\n    outer loop\n" +
+      [0, 1, 2].map((k) => `      vertex ${t[3 * k].toExponential(6)} ${t[3 * k + 1]} ${t[3 * k + 2]}`).join("\n") +
+      "\n    endloop\n  endfacet").join("\n") + "\nendsolid t\n";
+    return new TextEncoder().encode(s).buffer;
+  }
+  // piramide de base 100 x 50 (z = 5) sobre una losa que baja hasta z = 0, cuspide a z = 25
+  const A = [0, 0, 5], B = [100, 0, 5], C = [100, 50, 5], D = [0, 50, 5], Tp = [50, 25, 25];
+  const pyr = [[A, B, Tp], [B, C, Tp], [C, D, Tp], [D, A, Tp], [[0, 0, 0], [100, 50, 0], [100, 0, 0]], [[0, 0, 0], [0, 50, 0], [100, 50, 0]],
+    [[0, 0, 0], [100, 0, 0], [100, 0, 5]], [[0, 0, 0], [100, 0, 5], [0, 0, 5]]].map((t) => t.flat());
+  const mb = K.parseSTL(stlBin(pyr));
+  check("STL binario: triangulos y limites", mb.n === 8 && mb.max[2] === 25 && mb.min[2] === 0 && mb.max[0] === 100);
+  const ma = K.parseSTL(stlAscii(pyr));
+  check("STL de texto: mismos triangulos que el binario", ma.n === 8 && ma.tri.every((v, i) => Math.abs(v - mb.tri[i]) < 1e-4));
+  const mh = K.parseSTL(stlBin(pyr, 7));
+  check("STL binario con bytes de mas al final", mh.n === 8);
+  const mSolid = (() => { const b = stlBin(pyr); new Uint8Array(b).set(new TextEncoder().encode("solid exported by cad"), 0); return K.parseSTL(b); })();
+  check("STL binario cuya cabecera empieza por 'solid'", mSolid.n === 8);
+  check("STL de Uint8Array (no ArrayBuffer)", K.parseSTL(new Uint8Array(stlBin(pyr))).n === 8);
+  let msg = "";
+  try { K.parseSTL(new ArrayBuffer(30)); } catch (e) { msg = e.message; }
+  check("archivo que no es STL: error claro", /no parece un STL/.test(msg), msg);
+  msg = ""; try { K.parseSTL(stlBin([[0, 0, 0, NaN, 0, 0, 0, 1, 0]])); } catch (e) { msg = e.message; }
+  check("STL sin triangulos validos: error claro", /no contiene/.test(msg), msg);
+
+  const r = K.rasterSTL(mb, "z", 100, 50);
+  const at = (x, y) => r.hm[y * 100 + x];
+  check("raster: todo cubierto", r.covered === 5000);
+  // el pixel de la esquina se mide en su centro (0.5, 0.5): cara D-A-T -> 5 + 20 * 0.5 / 50 = 5.2
+  check("raster: la base (z=0) no cuenta, el relieve visible va de ~5 a 25", Math.abs(r.zLo - 5.2) < 1e-4 && Math.abs(r.zHi - 25) < 1e-6, `${r.zLo}..${r.zHi}`);
+  check("raster: cuspide arriba (1) y esquinas abajo (~0)", at(50, 25) > 0.97 && at(0, 0) < 0.03 && at(99, 49) < 0.03, `${at(50, 25)} ${at(0, 0)}`);
+  // altura exacta en un punto interior: cara A-B-T, en (25.5, 10.5) -> 5 + 20 * (y / 25)
+  const zExp = 5 + 20 * (10.5 / 25);
+  const zGot = r.zLo + (r.zHi - r.zLo) * at(25, 50 - 1 - 10);
+  check("raster: altura interpolada exacta", Math.abs(zGot - zExp) < 1e-3, `${zGot} vs ${zExp}`);
+  check("raster: fila 0 = arriba (y maxima)", Math.abs(at(50, 0) - at(50, 49)) < 1e-6 && at(50, 12) > at(50, 1));
+  const ry = K.rasterSTL(mb, "y", 100, 25);
+  check("eje Y arriba: planta X-Z (100 x 25), relieve en Y", ry.size.sizeU === 100 && ry.size.sizeV === 25 && ry.size.sizeZ === 50);
+  const rx = K.rasterSTL(mb, "x", 50, 25);
+  check("eje X arriba: planta Y-Z", rx.size.sizeU === 50 && rx.size.sizeV === 25 && rx.size.sizeZ === 100);
+  // triangulo mas pequeno que un pixel: no se pierde
+  const tiny = K.parseSTL(stlBin([[0, 0, 0, 10, 0, 0, 0, 10, 0], [4.9, 4.9, 3, 5.0, 4.9, 3, 4.9, 5.0, 3]].map((t) => t)));
+  const rt = K.rasterSTL(tiny, "z", 10, 10);
+  check("triangulo menor que un pixel: su altura aparece", Math.max(...rt.hm) === 1);
+  // modelo que no cubre todo: el fondo queda a 0 y lo cubierto se mide desde el punto mas bajo del modelo
+  const isl = K.parseSTL(stlBin([[0, 0, 0, 100, 0, 0, 0, 100, 0], [100, 100, 10, 100, 0, 0, 0, 100, 0]].map((t) => t)));
+  const ri = K.rasterSTL(isl, "z", 50, 50);
+  check("modelo con zonas vacias: fondo a 0", ri.covered === 2500 || ri.hm.some((v) => v === 0));
+  msg = ""; try { K.rasterSTL(K.parseSTL(stlBin([[0, 0, 0, 10, 0, 0, 0, 0, 10]])), "z", 10, 10); } catch (e) { msg = e.message; }
+  check("modelo sin planta visto desde arriba: error claro", /no tiene ancho o alto/.test(msg), msg);
+  // de punta a punta: STL -> prepHeight -> generate, sin gouge respecto al propio relieve
+  const w = 120, h = 60, res = 0.5;
+  const hm = K.rasterSTL(mb, "z", w, h).hm;
+  const p = baseParams({ depth: 10, rough: { on: true }, finish: { on: true, tool: { type: "ball", d: 3 } } });
+  p.W = w * res; p.H = h * res; p.thick = 18; p.gamma = 1; p.blackPoint = 0; p.whitePoint = 1; p.smoothMm = 0; p.darkHigh = false;
+  const H = K.prepHeight(hm, w, h, res, p);
+  const files = K.generate({ H, w, h, res }, p, null);
+  const txt = files.map((f) => f.parts.join("")).join("");
+  check("STL -> NC: desbaste y acabado sin NaN", files.length === 2 && !/NaN|Infinity/.test(txt) && Math.min(...H) >= -10.0001 && Math.max(...H) <= 1e-6,
+    files.map((f) => f.op + ":" + f.lines).join(" "));
+}
+
 // ------------------------------------------------------------------ resumen
 console.log(`\nResumen: ${nOk} correctas, ${nFail} fallos (${((Date.now() - T0) / 1000).toFixed(0)} s).`);
 if (nFail) {

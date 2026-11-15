@@ -110,6 +110,7 @@ input:focus-visible, select:focus-visible, button:focus-visible, summary:focus-v
 .drop strong { color: var(--ink); font-weight: 600; }
 .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .hint { grid-column: 1 / -1; font-size: 12px; color: var(--muted); margin: 0; }
+#stlBox:not([hidden]) { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; align-items: end; }
 
 /* mesa / vista previa */
 .stage { display: grid; gap: 12px; min-width: 0; }
@@ -184,14 +185,19 @@ input[aria-invalid="true"] { border-color: var(--bad); box-shadow: 0 0 0 1px var
   <!-- ================= PARAMETROS ================= -->
   <form class="params" id="form" autocomplete="off">
     <details class="box" open>
-      <summary>Imagen <span class="tag" id="imgTag">ejemplo</span></summary>
+      <summary>Imagen o STL <span class="tag" id="imgTag">ejemplo</span></summary>
       <div class="fields">
         <label class="drop" id="drop">
-          <input type="file" id="file" accept="image/*">
-          <strong>Elige o arrastra una imagen</strong>
-          <span>JPG o PNG. Claro = alto (sin tallar), oscuro = profundo.</span>
+          <input type="file" id="file" accept="image/*,.stl,model/stl,application/sla">
+          <strong>Elige o arrastra una imagen o un STL</strong>
+          <span>JPG o PNG: claro = alto (sin tallar), oscuro = profundo. STL: se mira desde arriba y lo más alto del modelo queda sin tallar.</span>
         </label>
         <p class="hint" id="imgNote" role="status" hidden></p>
+        <div class="full" id="stlBox" hidden>
+          <label class="f"><b>Eje vertical</b>
+            <select id="stlUp"><option value="z">Z arriba</option><option value="y">Y arriba</option><option value="x">X arriba</option></select></label>
+          <button type="button" class="btn ghost" id="stlScale">Profundidad a escala real</button>
+        </div>
         <label class="check full"><input type="checkbox" id="darkHigh"> Invertir: oscuro = alto</label>
         <label class="f full"><b>Contraste (gamma) <span id="gammaV">1.00</span></b>
           <input type="range" id="gamma" min="0.4" max="2.5" step="0.05" value="1"></label>

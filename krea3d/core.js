@@ -27,6 +27,146 @@
     return out;
   }
 
+  // ------------------------------------------------------------ STL -> alturas
+  /**
+   * Lee un STL binario o ASCII (ArrayBuffer). Devuelve { tri: Float32Array (9 numeros por triangulo),
+   * n, min:[x,y,z], max:[x,y,z] }. Lanza Error con un mensaje en castellano si no se puede leer.
+   */
+  function parseSTL(buf) {
+    if (!(buf instanceof ArrayBuffer)) {
+      if (buf && buf.buffer instanceof ArrayBuffer) buf = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+      else throw new Error("No se pudo leer el archivo STL.");
+    }
+    const len = buf.byteLength;
+    const dv = new DataView(buf);
+    const nBin = len >= 84 ? dv.getUint32(80, true) : -1;
+    const head = new Uint8Array(buf, 0, Math.min(len, 2048));
+    let headTxt = "";
+    for (let i = 0; i < head.length; i++) headTxt += String.fromCharCode(head[i]);
+    const looksAscii = /^\s*solid/i.test(headTxt) && /facet|vertex|endsolid/i.test(headTxt);
+    let tri, n;
+    if (nBin > 0 && len === 84 + 50 * nBin) binary();
+    else if (looksAscii) ascii();
+    else if (nBin > 0 && len >= 84 + 50 * nBin) binary();
+    else throw new Error("El archivo no parece un STL válido (ni binario ni de texto).");
+
+    function binary() {
+      n = nBin; tri = new Float32Array(9 * n);
+      for (let t = 0; t < n; t++) {
+        const o = 84 + 50 * t + 12;            // se salta la normal
+        for (let k = 0; k < 9; k++) tri[9 * t + k] = dv.getFloat32(o + 4 * k, true);
+      }
+    }
+    function ascii() {
+      let txt;
+      try { txt = new TextDecoder("utf-8").decode(new Uint8Array(buf)); }
+      catch (e) { throw new Error("El STL de texto es demasiado grande para este navegador. Expórtalo como STL binario."); }
+      const re = /vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g;
+      const v = [];
+      let m;
+      while ((m = re.exec(txt)) !== null) v.push(+m[1], +m[2], +m[3]);
+      n = Math.floor(v.length / 9);
+      tri = new Float32Array(v.slice(0, 9 * n));
+    }
+
+    // se descartan los triangulos con coordenadas no finitas
+    let k = 0;
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (let t = 0; t < n; t++) {
+      let ok = true;
+      for (let q = 0; q < 9; q++) if (!Number.isFinite(tri[9 * t + q])) { ok = false; break; }
+      if (!ok) continue;
+      for (let q = 0; q < 9; q++) {
+        const val = tri[9 * t + q], a = q % 3;
+        tri[9 * k + q] = val;
+        if (val < min[a]) min[a] = val;
+        if (val > max[a]) max[a] = val;
+      }
+      k++;
+    }
+    if (!k) throw new Error("El STL no contiene triángulos válidos.");
+    return { tri: k === n ? tri : tri.slice(0, 9 * k), n: k, min, max };
+  }
+
+  /** Ejes de la vista desde arriba: u = derecha, v = arriba en la imagen, z = altura. */
+  function stlAxes(up) {
+    if (up === "y") return { u: (x, y, z) => x, v: (x, y, z) => -z, z: (x, y, z) => y };
+    if (up === "x") return { u: (x, y, z) => y, v: (x, y, z) => z, z: (x, y, z) => x };
+    return { u: (x, y, z) => x, v: (x, y, z) => y, z: (x, y, z) => z };
+  }
+
+  /** Medidas del modelo visto desde arriba: { sizeU, sizeV, sizeZ } en las unidades del STL. */
+  function stlSize(mesh, up) {
+    const A = stlAxes(up), t = mesh.tri;
+    let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i < t.length; i += 3) {
+      const u = A.u(t[i], t[i + 1], t[i + 2]), v = A.v(t[i], t[i + 1], t[i + 2]), z = A.z(t[i], t[i + 1], t[i + 2]);
+      if (u < u0) u0 = u; if (u > u1) u1 = u;
+      if (v < v0) v0 = v; if (v > v1) v1 = v;
+      if (z < z0) z0 = z; if (z > z1) z1 = z;
+    }
+    return { u0, u1, v0, v1, z0, z1, sizeU: u1 - u0, sizeV: v1 - v0, sizeZ: z1 - z0 };
+  }
+
+  /**
+   * Mapa de alturas del STL visto desde arriba, en una rejilla w x h que cubre exactamente su contorno
+   * (fila 0 = arriba). Devuelve Float32Array 0..1 (1 = punto mas alto del modelo, 0 = el mas bajo; donde
+   * no hay modelo, 0) con el mismo sentido que la luminancia: se puede pasar tal cual a prepHeight.
+   */
+  function rasterSTL(mesh, up, w, h) {
+    const S = stlSize(mesh, up), A = stlAxes(up), t = mesh.tri;
+    if (!(S.sizeU > 0) || !(S.sizeV > 0)) throw new Error("Visto desde arriba el modelo no tiene ancho o alto. Prueba con otro eje vertical.");
+    const su = S.sizeU / w, sv = S.sizeV / h;
+    const top = new Float32Array(w * h).fill(-Infinity);
+    const P = new Float64Array(9);
+    for (let q = 0; q < t.length; q += 9) {
+      for (let k = 0; k < 3; k++) {
+        const x = t[q + 3 * k], y = t[q + 3 * k + 1], z = t[q + 3 * k + 2];
+        P[3 * k] = (A.u(x, y, z) - S.u0) / su - 0.5;       // centros de pixel en enteros
+        P[3 * k + 1] = (S.v1 - A.v(x, y, z)) / sv - 0.5;
+        P[3 * k + 2] = A.z(x, y, z);
+        // cada vertice cuenta en su pixel: asi no se pierden triangulos mas pequenos que un pixel
+        const ix = Math.min(w - 1, Math.max(0, Math.round(P[3 * k]))), iy = Math.min(h - 1, Math.max(0, Math.round(P[3 * k + 1])));
+        if (P[3 * k + 2] > top[iy * w + ix]) top[iy * w + ix] = P[3 * k + 2];
+      }
+      const ax = P[0], ay = P[1], az = P[2], bx = P[3], by = P[4], bz = P[5], cx = P[6], cy = P[7], cz = P[8];
+      const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      if (!(Math.abs(area) > 1e-12)) continue;               // pared vertical: no tapa nada
+      const x0 = Math.max(0, Math.ceil(Math.min(ax, bx, cx))), x1 = Math.min(w - 1, Math.floor(Math.max(ax, bx, cx)));
+      const y0 = Math.max(0, Math.ceil(Math.min(ay, by, cy))), y1 = Math.min(h - 1, Math.floor(Math.max(ay, by, cy)));
+      for (let iy = y0; iy <= y1; iy++) {
+        for (let ix = x0; ix <= x1; ix++) {
+          const w0 = ((bx - ix) * (cy - iy) - (by - iy) * (cx - ix)) / area;
+          const w1 = ((cx - ix) * (ay - iy) - (cy - iy) * (ax - ix)) / area;
+          const w2 = 1 - w0 - w1;
+          if (w0 < -1e-9 || w1 < -1e-9 || w2 < -1e-9) continue;
+          const z = w0 * az + w1 * bz + w2 * cz;
+          const o = iy * w + ix;
+          if (z > top[o]) top[o] = z;
+        }
+      }
+    }
+    // la escala va de lo mas bajo que se ve desde arriba a lo mas alto (la base de debajo no cuenta)
+    let zLo = Infinity, zHi = -Infinity, covered = 0;
+    for (let i = 0; i < top.length; i++) {
+      const z = top[i];
+      if (z === -Infinity) continue;
+      covered++;
+      if (z < zLo) zLo = z; if (z > zHi) zHi = z;
+    }
+    const out = new Float32Array(w * h);
+    if (covered === w * h) {
+      const range = zHi - zLo;
+      for (let i = 0; i < out.length; i++) out[i] = range > 0 ? Math.min(1, Math.max(0, (top[i] - zLo) / range)) : 1;
+    } else {
+      // hay zonas sin modelo: van al fondo (0) y el modelo se mide desde su punto mas bajo
+      zLo = Math.min(zLo, S.z0);
+      const range = zHi - zLo;
+      for (let i = 0; i < out.length; i++) if (top[i] !== -Infinity) out[i] = range > 0 ? Math.min(1, Math.max(0, (top[i] - zLo) / range)) : 1;
+    }
+    return { hm: out, covered, size: S, zLo, zHi, relief: covered ? zHi - zLo : 0 };
+  }
+
   /** lum: Float32Array 0..1 (0 = negro). Devuelve Z en mm (0 = cara del tablero, negativo = tallado). */
   function prepHeight(lum, w, h, res, p) {
     let v = new Float32Array(lum.length);
@@ -690,7 +830,7 @@
   }
 
 
-  const api = { boxBlur, prepHeight, toolModel, makeBoard, lineSolver, simplify, fnum, Writer, validate, tiles, generate, hillshade };
+  const api = { boxBlur, parseSTL, stlSize, rasterSTL, prepHeight, toolModel, makeBoard, lineSolver, simplify, fnum, Writer, validate, tiles, generate, hillshade };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.Krea = api;
 })(typeof self !== "undefined" ? self : this);

@@ -6,7 +6,10 @@
   const num = (id) => { const s = String($(id).value).trim(); return s === "" ? NaN : Number(s); };
   const fin = Number.isFinite;
   const MAX_IMG_PX = 16e6, MAX_IMG_SIDE = 8192;   // la rejilla nunca necesita mas detalle que esto
-  let src = null;          // canvas con la imagen original
+  let src = null;          // canvas con la imagen original (o la vista desde arriba del STL)
+  let mesh = null;         // STL cargado ({tri, n, ...}) o null si la fuente es una imagen
+  let meshCache = null;    // { key, hm } ultimo mapa de alturas del STL
+  let stlRelief = 0;       // alto del relieve visible desde arriba, en unidades del STL
   let srcId = 0;           // cambia con cada imagen cargada
   let aspect = 1;
   let lastFiles = [];
@@ -56,16 +59,68 @@
   function syncFromW() { const W = num("W"); if (fin(W) && W > 0) $("Hh").value = Math.max(1, Math.round(W / aspect)); }
   function syncFromH() { const H = num("Hh"); if (fin(H) && H > 0) $("W").value = Math.max(1, Math.round(H * aspect)); }
 
-  function setSource(canvas, label, note) {
-    src = canvas; srcId++; aspect = canvas.width / canvas.height;
+  function setSource(canvas, label, note, asp) {
+    src = canvas; srcId++; aspect = asp || canvas.width / canvas.height;
     $("imgTag").textContent = label;
     $("imgNote").textContent = note || ""; $("imgNote").hidden = !note;
     if ($("lock").checked) syncFromW();
     refresh();
   }
 
+  function baseName(file) { return file.name.replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "_").slice(0, 40); }
+
+  /** Vista desde arriba del STL (gris = altura) para la miniatura y la proporcion. */
+  function stlCanvas() {
+    const S = Krea.stlSize(mesh, $("stlUp").value);
+    const k = 800 / Math.max(S.sizeU, S.sizeV);
+    const cw = Math.max(1, Math.round(S.sizeU * k)), ch = Math.max(1, Math.round(S.sizeV * k));
+    const r = Krea.rasterSTL(mesh, $("stlUp").value, cw, ch);
+    const c = document.createElement("canvas"); c.width = cw; c.height = ch;
+    const g = c.getContext("2d"), img = g.createImageData(cw, ch);
+    for (let i = 0; i < cw * ch; i++) { const v = Math.round(r.hm[i] * 255); img.data[4 * i] = img.data[4 * i + 1] = img.data[4 * i + 2] = v; img.data[4 * i + 3] = 255; }
+    g.putImageData(img, 0, 0);
+    // la proporcion es la del modelo, no la de la miniatura redondeada
+    return { c, S, relief: r.relief, aspect: S.sizeU / S.sizeV };
+  }
+  function fmtMm(x) { return (+x.toFixed(x < 10 ? 2 : 1)).toString(); }
+  function showStl(label) {
+    let r;
+    try { r = stlCanvas(); }
+    catch (e) { setGenError(String(e && e.message || e)); return false; }
+    setGenError("");
+    const S = r.S;
+    stlRelief = r.relief;
+    const note = `Modelo de ${fmtMm(S.sizeU)} × ${fmtMm(S.sizeV)} de planta y ${fmtMm(r.relief)} de relieve visible desde arriba (unidades del STL, normalmente mm), ` +
+      `${mesh.n.toLocaleString("es")} triángulos. Lo más alto del modelo queda en la cara del tablero y lo más bajo a la profundidad indicada. ` +
+      `Si el relieve sale al revés, cambia el eje vertical.`;
+    setSource(r.c, label, note, r.aspect);
+    return true;
+  }
+  /** Profundidad para que el modelo quede a escala real con el ancho actual del mural. */
+  function stlScaleDepth() {
+    if (!mesh) return;
+    const S = Krea.stlSize(mesh, $("stlUp").value), W = num("W");
+    if (!(fin(W) && W > 0 && S.sizeU > 0 && stlRelief > 0)) return;
+    $("depth").value = +(stlRelief * W / S.sizeU).toFixed(2);
+    refresh();
+  }
+  function loadSTL(file) {
+    file.arrayBuffer().then((buf) => {
+      let m;
+      try { m = Krea.parseSTL(buf); }
+      catch (e) { setGenError(String(e && e.message || e)); return; }
+      mesh = m; meshCache = null;
+      $("stlBox").hidden = false;
+      $("darkHigh").checked = false;        // en un STL lo alto ya es claro
+      const base = baseName(file);
+      if (base) $("name").value = base;
+      if (!showStl(`STL · ${m.n.toLocaleString("es")} triángulos`)) { mesh = null; $("stlBox").hidden = true; }
+    }, () => setGenError("No se pudo leer el archivo STL."));
+  }
+
   function loadFile(file) {
-    if (!file || !file.type.startsWith("image/")) { setGenError("Ese archivo no es una imagen. Usa JPG o PNG."); return; }
+    if (file && /\.stl$/i.test(file.name)) { loadSTL(file); return; }
+    if (!file || !file.type.startsWith("image/")) { setGenError("Ese archivo no es una imagen ni un STL. Usa JPG, PNG o STL."); return; }
     const url = URL.createObjectURL(file);
     const im = new Image();
     im.onload = () => {
@@ -88,7 +143,8 @@
       }
       if (!ok) { setGenError("La imagen es demasiado grande para este navegador. Redúcela (por ejemplo a 4000 px de lado) y vuelve a cargarla."); return; }
       setGenError("");
-      const base = file.name.replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "_").slice(0, 40);
+      mesh = null; meshCache = null; $("stlBox").hidden = true;
+      const base = baseName(file);
       if (base) $("name").value = base;
       const note = k < 1 ? `Imagen muy grande (${nw} × ${nh} px): se ha reducido a ${cw} × ${ch} px para poder procesarla. Sigue teniendo más detalle del que usa la rejilla.` : "";
       setSource(c, k < 1 ? `${nw} × ${nh} px → ${cw} × ${ch}` : `${nw} × ${nh} px`, note);
@@ -99,6 +155,12 @@
 
   /** Luminancia 0..1 de la imagen remuestreada a w×h. */
   function luminance(w, h) {
+    if (mesh) {
+      // STL: alturas exactas del modelo en la rejilla pedida (sin pasar por 8 bits de un canvas)
+      const key = srcId + "|" + w + "x" + h;
+      if (!meshCache || meshCache.key !== key) meshCache = { key, hm: Krea.rasterSTL(mesh, $("stlUp").value, w, h).hm };
+      return meshCache.hm.slice();
+    }
     const c = document.createElement("canvas"); c.width = w; c.height = h;
     const g = c.getContext("2d", { willReadFrequently: true });
     g.fillStyle = "#fff"; g.fillRect(0, 0, w, h);
@@ -602,6 +664,8 @@
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => loadFile(e.dataTransfer.files[0]));
   $("gen").onclick = generate;
+  $("stlUp").addEventListener("change", () => { if (mesh) { meshCache = null; showStl($("imgTag").textContent); } });
+  $("stlScale").onclick = stlScaleDepth;
 
   if (/claude\.ai|claudeusercontent|anthropic/.test(location.hostname)) $("sandboxNote").hidden = false;
 
