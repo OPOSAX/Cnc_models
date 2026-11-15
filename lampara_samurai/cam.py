@@ -1,16 +1,22 @@
 """
-Genera un programa NC (G-code GRBL/Mach3/LinuxCNC compatible) y un DXF por pieza.
+Genera un programa NC y un DXF por pieza.
 
-Origen de cada programa:
+Formato NC: el del ejemplo del fabricante del router (Chaoda, rough-1.nc): numeros de
+linea N, G54 en el primer movimiento, codigo modal, sin comentarios ni arcos G2/G3,
+F entero, final G53 Z0 / G0 M05 / M30 / %, saltos de linea CRLF. Corte plano en 3 ejes
+(no se programa el eje B).
+
+Origen de cada programa (G54):
   X0 Y0 = esquina inferior izquierda del rectangulo que envuelve la pieza
   Z0    = cara superior del tablero
-Orden de operaciones: taladros -> cajeras -> cortes interiores -> contorno exterior (con puentes).
+Orden de operaciones: taladros (helicoidal) -> marcado -> cajeras -> cortes interiores
+(con dogbones) -> contorno exterior en concordancia (con puentes en tramos rectos).
 """
 import math
 import os
 import numpy as np
 import ezdxf
-from shapely.geometry import Polygon, LineString
+from shapely.geometry import Polygon, LineString, Point
 from shapely.geometry.polygon import orient
 from shapely import affinity
 import geometria as G
@@ -18,20 +24,22 @@ import geometria as G
 # ------------------------------------------------------------- parametros maquina
 TOOL_D = 6.0          # fresa plana 6 mm (2 cortes, compresion o upcut)
 R = TOOL_D / 2
-SPINDLE = 18000       # rpm (el .tap de referencia de PowerMill traia S1500: revisar)
-FEED = 1500           # mm/min XY  (referencia PowerMill: 1000)
-PLUNGE = 500          # mm/min Z   (referencia PowerMill: 500)
+SPINDLE = 18000       # rpm (el ejemplo del fabricante rough-1.nc trae S1500: revisar)
+FEED = 1500           # mm/min XY  (rough-1.nc: F5000)
+PLUNGE = 500          # mm/min Z   (rough-1.nc: F1000)
 SAFE_Z = 10.0         # altura de seguridad sobre el tablero
 CLEAR_Z = 10.0
 OVERCUT = 0.3         # pasar por debajo del tablero (martir)
 STEPDOWN = {15.0: 5.0, 3.0: 1.8}
 TAB_W = 8.0           # ancho del puente (material que queda)
-TAB_H = {15.0: 3.0, 3.0: 1.2}
+TAB_H = {15.0: 3.0, 3.0: 1.2}   # altura real del puente medida desde la cara inferior del tablero
+SHEET_MARGIN = 10.0   # margen minimo entre la huella de la fresa y el borde del tablero
+assert abs(G.TOOL_R - R) < 1e-9 and G.DOG_R >= R, "geometria.TOOL_R/DOG_R no coinciden con la fresa"
 STEPOVER = 0.45 * TOOL_D
 
 
 def f(v):
-    """Formato PowerMill: 10. / -.5 / 1.376 / 0"""
+    """Numeros como en rough-1.nc (Chaoda): 10. / -.5 / 1.376 / 0"""
     v = round(v, 3)
     if abs(v) < 5e-4:
         return "0"
@@ -135,19 +143,88 @@ def dogbone_path(hole):
     return out
 
 
-def contour(nc, pts, depth, step, tabs=0, tab_h=0.0):
+def _tab_runs(pts, outline):
+    """Tramos del recorrido validos para puentes: rectos o de curvatura suave (radio
+    >= 10 mm, sin los arcos R3 de las esquinas), de longitud suficiente y cuyo
+    exterior es retal (no la pared de una ranura o muesca de la propia pieza).
+    Se descarta tambien cualquier tramo cuyo exterior cae en una concavidad del
+    contorno (dentro de su envolvente convexa): muescas, ranuras y rebajes que
+    reciben otra pieza, por poco profundos que sean."""
+    path = LineString(pts)
+    L = path.length
+    ds = 0.5
+    ss = np.arange(0.0, L, ds)
+    P_ = lambda t: np.array(path.interpolate(min(max(t, 0.0), L)).coords[0])
+    dirs = []
+    for t in ss:
+        v = P_(t + 1.0) - P_(t - 1.0)
+        dirs.append(math.atan2(v[1], v[0]))
+    dirs = np.unwrap(np.array(dirs))
+    turn = np.abs(np.diff(dirs)) / ds                    # rad/mm = 1/radio
+    smooth = np.concatenate([turn < 1 / 10.0, [False]])
+    runs, i0, acc = [], None, 0.0
+    for i, ok in enumerate(smooth):
+        if ok and i0 is None:
+            i0, acc = i, 0.0
+        elif ok:
+            acc += turn[i - 1] * ds
+            if acc > math.radians(90):
+                runs.append((ss[i0], ss[i])); i0, acc = i, 0.0
+        elif i0 is not None:
+            runs.append((ss[i0], ss[i])); i0 = None
+    need = TAB_W + TOOL_D + 4.0
+    outer = outline.buffer(R, resolution=16)
+    near = outline.buffer(0.5)
+    hull = outline.convex_hull
+    good = []
+    for r0, r1 in runs:
+        if r1 - r0 < need:
+            continue
+        ok = True
+        for frac in (0.15, 0.5, 0.85):
+            sp = r0 + (r1 - r0) * frac
+            q = P_(sp); d = P_(sp + 0.5) - P_(sp - 0.5); d /= np.linalg.norm(d)
+            nv = np.array([-d[1], d[0]])
+            if outer.contains(Point(*(q + nv * 0.5))):
+                nv = -nv                                  # normal hacia fuera de la pieza
+            if near.contains(Point(*(q + nv * (TOOL_D + R)))):
+                ok = False; break                         # enfrente hay pieza: ranura/muesca
+            if hull.contains(Point(*(q + nv * (0.5 - R)))):
+                ok = False; break                         # concavidad (punto a 0.5 mm fuera del contorno)
+        if ok:
+            good.append((float(r0), float(r1)))
+    return good, float(L)
+
+
+def place_tabs(pts, outline, ntabs):
+    """Intervalos (en longitud de recorrido) de los puentes, repartidos lo mas
+    uniformemente posible pero solo dentro de tramos validos."""
+    good, L = _tab_runs(pts, outline)
+    span = TAB_W + TOOL_D
+    sep = min(span + 20, 0.6 * L / max(ntabs, 1))       # separacion minima entre puentes
+    tabs = []
+    for i in range(ntabs):
+        ideal = L * (i + 0.5) / ntabs
+        best = None
+        for r0, r1 in good:
+            c = min(max(ideal, r0 + span / 2 + 2), r1 - span / 2 - 2)
+            if any(abs(c - t) < sep for t in tabs):
+                continue
+            if best is None or abs(c - ideal) < abs(best - ideal):
+                best = c
+        if best is not None:
+            tabs.append(best)
+    if len(tabs) < min(ntabs, 3):
+        print(f"  AVISO: solo {len(tabs)} puentes validos")
+    return [(c - span / 2, c + span / 2) for c in sorted(tabs)]
+
+
+def contour(nc, pts, depth, step, tab_iv=(), tab_z=0.0):
     """Recorre un contorno cerrado a varias profundidades; puentes en la ultima pasada."""
     zs = levels(depth, step)
     pts = [np.array(p, float) for p in pts]
     seg_len = [np.linalg.norm(pts[i + 1] - pts[i]) for i in range(len(pts) - 1)]
-    L = sum(seg_len)
-    tab_iv = []
-    if tabs:
-        span = TAB_W + TOOL_D
-        for i in range(tabs):
-            c = L * (i + 0.5) / tabs
-            tab_iv.append((c - span / 2, c + span / 2))
-    tab_z = -depth + tab_h
+    tab_iv = list(tab_iv)
     nc.rapid_xy(*pts[0]); nc.plunge(0.5)
     for zi, z in enumerate(zs):
         last = zi == len(zs) - 1
@@ -170,7 +247,6 @@ def contour(nc, pts, depth, step, tabs=0, tab_h=0.0):
                 mid = s0 + (c0 + c1) / 2
                 inside = any(t0 <= mid <= t1 for t0, t1 in tab_iv)
                 zt = tab_z if inside else z
-                pa = a + (b - a) * (c0 / sl) if sl else a
                 pb = a + (b - a) * (c1 / sl) if sl else b
                 if abs(zt - nc.z) > 1e-6:
                     nc.plunge(zt)
@@ -234,6 +310,7 @@ def normalize(p):
 
 
 def gen_piece(p, outdir_nc, outdir_dxf):
+    assert p.outline.geom_type == "Polygon" and not p.outline.interiors, f"{p.pid}: contorno con huecos (usar holes)"
     g = normalize(p)
     T = p.thick
     step = STEPDOWN[T]
@@ -258,12 +335,13 @@ def gen_piece(p, outdir_nc, outdir_dxf):
             pocket(nc, pk, d, 4.0)
     if g["holes"]:
         for h in g["holes"]:
-            contour(nc, dogbone_path(h), depth, step, tabs=0)
+            contour(nc, dogbone_path(h), depth, step)
     outer = g["outline"].buffer(R, resolution=16)
     pts = ring_pts(outer.exterior, ccw=False)            # horario = fresado en concordancia
     L = outer.exterior.length
     ntabs = int(min(6, max(3, round(L / 300))))
-    contour(nc, pts, depth, step, tabs=ntabs, tab_h=TAB_H[T])
+    tab_iv = place_tabs([np.array(p, float) for p in pts], g["outline"], ntabs)
+    contour(nc, pts, depth, step, tab_iv=tab_iv, tab_z=-T + TAB_H[T])
     nc.move(0, z=SAFE_Z)
     nc("G53 Z0")
     nc("G0 M05")
@@ -271,7 +349,7 @@ def gen_piece(p, outdir_nc, outdir_dxf):
     nc("%", numbered=False)
     fn = f"{p.pid}_{p.name.split('(')[0].strip().lower().replace(' ', '_').replace('/', '-')}"
     with open(os.path.join(outdir_nc, fn + ".nc"), "w", newline="") as fh:
-        fh.write("\r\n".join(nc.l) + "\r\n")          # CRLF como el .tap de PowerMill
+        fh.write("\r\n".join(nc.l) + "\r\n")          # CRLF como rough-1.nc
 
     # DXF
     doc = ezdxf.new("R2010", setup=True); msp = doc.modelspace()
@@ -287,11 +365,13 @@ def gen_piece(p, outdir_nc, outdir_dxf):
     for ln, d in g["engraves"]:
         msp.add_lwpolyline(list(ln.coords), dxfattribs={"layer": "MARCADO"})
     doc.saveas(os.path.join(outdir_dxf, fn + ".dxf"))
-    return fn, nc.l
+    sheet = (b[2] - b[0] + 2 * R + 2 * SHEET_MARGIN, b[3] - b[1] + 2 * R + 2 * SHEET_MARGIN)
+    return fn, nc.l, len(tab_iv), sheet
 
 
 if __name__ == "__main__":
     pcs, info = G.build()
+    os.makedirs("nc", exist_ok=True); os.makedirs("dxf", exist_ok=True)
     for p in pcs:
-        fn, lines = gen_piece(p, "nc", "dxf")
-        print(f"{fn}.nc  ({len(lines)} lineas)")
+        fn, lines, nt, sheet = gen_piece(p, "nc", "dxf")
+        print(f"{fn}.nc  ({len(lines)} lineas, {nt} puentes, tablero minimo {sheet[0]:.0f} x {sheet[1]:.0f} mm)")

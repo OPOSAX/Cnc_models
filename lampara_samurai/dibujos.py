@@ -27,7 +27,7 @@ def _solid(poly, pl, t):
 
 def _hat_faces(n=72):
     faces = []
-    R0, R1 = G.HAT_RHOLE, G.HAT_R
+    R0, R1 = G.build()[1]["hat_rhole"], G.HAT_R
     z = lambda r: G.HAT_ZAPEX - G.HAT_H / G.HAT_R * r
     for i in range(n):
         a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1) / n
@@ -60,7 +60,7 @@ def render(ax, pcs, explode=0.0, elev=12, azim=60):
                 c = o + e1 * 0 + e2 * 0
                 zc = o[2]
                 off = np.array([0, 0, 0.0])
-                if p.pid in ("P09", "P10", "P11"): off[2] = 2.2 * explode
+                if p.pid in ("P09", "P10", "P11", "P17", "P18"): off[2] = 2.2 * explode
                 elif p.pid in ("P08",): off[2] = 1.6 * explode
                 elif p.pid in ("P14",): off[2] = 1.1 * explode
                 elif p.pid in ("P15", "P16"):
@@ -96,7 +96,8 @@ def montaje(pcs, path):
         ax = fig.add_subplot(1, 3, i + 1, projection="3d")
         render(ax, pcs, explode=ex, elev=el, azim=az)
         ax.set_title(titles[i], fontsize=14)
-    fig.suptitle("Lampara Samurai - montaje (altura 760 mm, base 330 x 220 mm, sombrero 440 mm)", fontsize=15)
+    top = G.build()[1]["top"]
+    fig.suptitle(f"Lampara Samurai - montaje (altura {top:.0f} mm, base 330 x 220 mm, sombrero 440 mm)", fontsize=15)
     plt.tight_layout()
     fig.savefig(path, facecolor="white")
     plt.close(fig)
