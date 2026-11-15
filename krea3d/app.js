@@ -9,7 +9,7 @@
   let src = null;          // canvas con la imagen original (o la vista desde arriba del STL)
   let mesh = null;         // STL cargado ({tri, n, ...}) o null si la fuente es una imagen
   let meshCache = null;    // { key, hm } ultimo mapa de alturas del STL
-  let stlRelief = 0;       // alto del relieve visible desde arriba, en unidades del STL
+  let meshUp = "z";        // eje vertical con el que se esta usando el STL
   let srcId = 0;           // cambia con cada imagen cargada
   let aspect = 1;
   let lastFiles = [];
@@ -69,12 +69,12 @@
 
   function baseName(file) { return file.name.replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "_").slice(0, 40); }
 
-  /** Vista desde arriba del STL (gris = altura) para la miniatura y la proporcion. */
-  function stlCanvas() {
-    const S = Krea.stlSize(mesh, $("stlUp").value);
+  /** Vista desde arriba del STL m con el eje 'up' (gris = altura), para la miniatura y la proporcion. */
+  function stlView(m, up) {
+    const S = Krea.stlSize(m, up);
     const k = 800 / Math.max(S.sizeU, S.sizeV);
     const cw = Math.max(1, Math.round(S.sizeU * k)), ch = Math.max(1, Math.round(S.sizeV * k));
-    const r = Krea.rasterSTL(mesh, $("stlUp").value, cw, ch);
+    const r = Krea.rasterSTL(m, up, cw, ch);           // lanza Error si el modelo no tiene planta con ese eje
     const c = document.createElement("canvas"); c.width = cw; c.height = ch;
     const g = c.getContext("2d"), img = g.createImageData(cw, ch);
     for (let i = 0; i < cw * ch; i++) { const v = Math.round(r.hm[i] * 255); img.data[4 * i] = img.data[4 * i + 1] = img.data[4 * i + 2] = v; img.data[4 * i + 3] = 255; }
@@ -83,25 +83,32 @@
     return { c, S, relief: r.relief, aspect: S.sizeU / S.sizeV };
   }
   function fmtMm(x) { return (+x.toFixed(x < 10 ? 2 : 1)).toString(); }
-  function showStl(label) {
-    let r;
-    try { r = stlCanvas(); }
-    catch (e) { setGenError(String(e && e.message || e)); return false; }
-    setGenError("");
+  /** Pone el STL m como fuente con el eje 'up'. Solo cambia el estado si todo ha ido bien. */
+  function applyStl(m, up, label, extraNote) {
+    const r = stlView(m, up);
+    mesh = m; meshUp = up; meshCache = null;
+    $("stlUp").value = up;
+    $("stlBox").hidden = false;
     const S = r.S;
-    stlRelief = r.relief;
-    const note = `Modelo de ${fmtMm(S.sizeU)} × ${fmtMm(S.sizeV)} de planta y ${fmtMm(r.relief)} de relieve visible desde arriba (unidades del STL, normalmente mm), ` +
-      `${mesh.n.toLocaleString("es")} triángulos. Lo más alto del modelo queda en la cara del tablero y lo más bajo a la profundidad indicada. ` +
-      `Si el relieve sale al revés, cambia el eje vertical.`;
+    const note = (extraNote ? extraNote + " " : "") +
+      `Modelo de ${fmtMm(S.sizeU)} × ${fmtMm(S.sizeV)} de planta y ${fmtMm(r.relief)} de relieve visible desde arriba (unidades del STL, normalmente mm), ` +
+      `${m.n.toLocaleString("es")} triángulos. Lo más alto del modelo queda en la cara del tablero y lo más bajo a la profundidad indicada. ` +
+      `Si el relieve sale de lado o al revés, cambia el eje vertical.`;
+    setGenError("");
     setSource(r.c, label, note, r.aspect);
-    return true;
   }
-  /** Profundidad para que el modelo quede a escala real con el ancho actual del mural. */
+  /** Profundidad para que el modelo quede a escala real con el ancho actual del mural (medida en la rejilla real). */
   function stlScaleDepth() {
     if (!mesh) return;
-    const S = Krea.stlSize(mesh, $("stlUp").value), W = num("W");
-    if (!(fin(W) && W > 0 && S.sizeU > 0 && stlRelief > 0)) return;
-    $("depth").value = +(stlRelief * W / S.sizeU).toFixed(2);
+    const p = params();
+    if (!(fin(p.W) && p.W > 0 && fin(p.H) && p.H > 0 && fin(p.res) && p.res > 0)) { setGenError("Indica primero el ancho, el alto y la resolución del mural."); return; }
+    const gr = gridOf(p);
+    let r;
+    try { r = Krea.rasterSTL(mesh, meshUp, gr.w, gr.h); }
+    catch (e) { setGenError(String(e && e.message || e)); return; }
+    const S = r.size;
+    if (!(r.relief > 0 && S.sizeU > 0)) return;
+    $("depth").value = +(r.relief * gr.W / S.sizeU).toFixed(2);
     refresh();
   }
   function loadSTL(file) {
@@ -109,12 +116,21 @@
       let m;
       try { m = Krea.parseSTL(buf); }
       catch (e) { setGenError(String(e && e.message || e)); return; }
-      mesh = m; meshCache = null;
-      $("stlBox").hidden = false;
-      $("darkHigh").checked = false;        // en un STL lo alto ya es claro
-      const base = baseName(file);
-      if (base) $("name").value = base;
-      if (!showStl(`STL · ${m.n.toLocaleString("es")} triángulos`)) { mesh = null; $("stlBox").hidden = true; }
+      // primero el eje elegido; si con ese eje el modelo no tiene planta, se prueban los otros
+      const want = $("stlUp").value;
+      const label = `STL · ${m.n.toLocaleString("es")} triángulos`;
+      for (const up of [want].concat(["z", "y", "x"].filter((u) => u !== want))) {
+        try {
+          applyStl(m, up, label, up !== want ? `Con el eje ${want.toUpperCase()} hacia arriba el modelo no tiene planta: se usa ${up.toUpperCase()}.` : "");
+        } catch (e) { continue; }
+        $("darkHigh").checked = false;        // en un STL lo alto ya es claro
+        $("smoothMm").value = 0;              // las alturas del STL son exactas: sin suavizado por defecto
+        const base = baseName(file);
+        if (base) $("name").value = base;
+        refresh();
+        return;
+      }
+      setGenError("Ese STL no tiene superficie visible desde ningún eje (es plano o está vacío).");
     }, () => setGenError("No se pudo leer el archivo STL."));
   }
 
@@ -158,7 +174,7 @@
     if (mesh) {
       // STL: alturas exactas del modelo en la rejilla pedida (sin pasar por 8 bits de un canvas)
       const key = srcId + "|" + w + "x" + h;
-      if (!meshCache || meshCache.key !== key) meshCache = { key, hm: Krea.rasterSTL(mesh, $("stlUp").value, w, h).hm };
+      if (!meshCache || meshCache.key !== key) meshCache = { key, hm: Krea.rasterSTL(mesh, meshUp, w, h).hm };
       return meshCache.hm.slice();
     }
     const c = document.createElement("canvas"); c.width = w; c.height = h;
@@ -664,7 +680,15 @@
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", (e) => loadFile(e.dataTransfer.files[0]));
   $("gen").onclick = generate;
-  $("stlUp").addEventListener("change", () => { if (mesh) { meshCache = null; showStl($("imgTag").textContent); } });
+  $("stlUp").addEventListener("change", () => {
+    if (!mesh) return;
+    const up = $("stlUp").value, prev = meshUp;
+    try { applyStl(mesh, up, $("imgTag").textContent, ""); }
+    catch (e) {
+      $("stlUp").value = prev;              // ese eje no vale: se queda el anterior, que si funciona
+      setGenError(`Con el eje ${up.toUpperCase()} hacia arriba el modelo no tiene planta (es plano visto desde ahí). Se mantiene ${prev.toUpperCase()}.`);
+    }
+  });
   $("stlScale").onclick = stlScaleDepth;
 
   if (/claude\.ai|claudeusercontent|anthropic/.test(location.hostname)) $("sandboxNote").hidden = false;

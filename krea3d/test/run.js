@@ -570,11 +570,30 @@ console.log("\nSTL");
   msg = ""; try { K.parseSTL(stlBin([[0, 0, 0, NaN, 0, 0, 0, 1, 0]])); } catch (e) { msg = e.message; }
   check("STL sin triangulos validos: error claro", /no contiene/.test(msg), msg);
 
+  const enc = (t) => new TextEncoder().encode(t).buffer;
+  const facet = (a, b, c) => `facet normal 0 0 1\n outer loop\n  vertex ${a}\n  vertex ${b}\n  vertex ${c}\n endloop\nendfacet\n`;
+  const up = K.parseSTL(enc("SOLID A\r\n" + facet("0 0 0", "1 0 0", "0 1 1").toUpperCase().replace(/\n/g, "\r\n") + "ENDSOLID A\r\n"));
+  check("STL de texto en MAYUSCULAS y CRLF", up.n === 1 && up.tri[7] === 1);
+  check("STL de texto con BOM", K.parseSTL(enc("﻿solid a\n" + facet("0 0 0", "1 0 0", "0 1 1") + "endsolid a\n")).n === 1);
+  check("STL de texto con tabs, .5, 1e+02 y sin endsolid", (() => { const m = K.parseSTL(enc("solid a\n" + facet(".5\t0 0", "1e+02 0 0", "-0 1 1"))); return m.n === 1 && m.tri[0] === 0.5 && m.tri[3] === 100; })());
+  const bad = K.parseSTL(enc("solid a\n" + facet("nan 0 0", "1 0 0", "0 1 1") + facet("5 5 5", "6 5 5", "5 6 6") + facet("0,5 0 0", "1 0 0", "0 1 1") + facet("7 7 7", "8 7 7", "7 8 8") + "endsolid a\n"));
+  check("faceta con nan o coma decimal: se descarta sin desplazar las demas", bad.n === 2 && bad.tri[0] === 5 && bad.tri[9] === 7, Array.from(bad.tri).join(","));
+  check("varios solid en un archivo", K.parseSTL(enc("solid a\n" + facet("0 0 0", "1 0 0", "0 1 1") + "endsolid a\nsolid b\n" + facet("2 0 0", "3 0 0", "2 1 1") + "endsolid b\n")).n === 2);
+  const wrongCount = (() => { const b = stlBin(pyr); new DataView(b).setUint32(80, 50, true); return K.parseSTL(b); })();
+  check("STL binario con conteo mayor que el archivo: lee lo que hay", wrongCount.n === 8);
+  const zeroCount = (() => { const b = stlBin(pyr); new DataView(b).setUint32(80, 0, true); return K.parseSTL(b); })();
+  check("STL binario con conteo 0: lee lo que hay", zeroCount.n === 8);
+  const solidPad = (() => { const b = stlBin(pyr, 10); new Uint8Array(b).set(new TextEncoder().encode("solid facet vertex"), 0); return K.parseSTL(b); })();
+  check("STL binario con cabecera 'solid facet vertex' y relleno al final", solidPad.n === 8);
+  // triangulos diminutos junto a uno grande: no crean picos fuera del contorno
+  const spike = K.parseSTL(stlBin([[0, 0, 0, 10, 0, 0, 10, 10, 0], [0, 0, 0, 10, 10, 0, 0, 10, 0], [10.2, 5, 9, 10.3, 5, 9, 10.2, 5.1, 9], [0, 0, 0, 20, 0, 0, 20, 0.01, 0]]));
+  const rs = K.rasterSTL(spike, "z", 20, 10);
+  check("triangulo diminuto aislado no tapa pixeles ya cubiertos", rs.hm.filter((v) => v > 0.5).length === 1, rs.hm.filter((v) => v > 0.5).length + " pixeles altos");
   const r = K.rasterSTL(mb, "z", 100, 50);
   const at = (x, y) => r.hm[y * 100 + x];
   check("raster: todo cubierto", r.covered === 5000);
-  // el pixel de la esquina se mide en su centro (0.5, 0.5): cara D-A-T -> 5 + 20 * 0.5 / 50 = 5.2
-  check("raster: la base (z=0) no cuenta, el relieve visible va de ~5 a 25", Math.abs(r.zLo - 5.2) < 1e-4 && Math.abs(r.zHi - 25) < 1e-6, `${r.zLo}..${r.zHi}`);
+  // se mide en los centros de pixel: esquina (0.5, 0.5) en la cara D-A-T -> 5.2; la cuspide (50, 25) cae entre centros -> 24.6
+  check("raster: la base (z=0) no cuenta, el relieve visible va de ~5 a 25", Math.abs(r.zLo - 5.2) < 1e-4 && r.zHi > 24.5 && r.zHi <= 25, `${r.zLo}..${r.zHi}`);
   check("raster: cuspide arriba (1) y esquinas abajo (~0)", at(50, 25) > 0.97 && at(0, 0) < 0.03 && at(99, 49) < 0.03, `${at(50, 25)} ${at(0, 0)}`);
   // altura exacta en un punto interior: cara A-B-T, en (25.5, 10.5) -> 5 + 20 * (y / 25)
   const zExp = 5 + 20 * (10.5 / 25);

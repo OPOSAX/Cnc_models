@@ -39,19 +39,17 @@
     }
     const len = buf.byteLength;
     const dv = new DataView(buf);
-    const nBin = len >= 84 ? dv.getUint32(80, true) : -1;
+    const nHead = len >= 84 ? dv.getUint32(80, true) : 0;
+    const nFit = len >= 84 ? Math.floor((len - 84) / 50) : 0;     // triangulos que caben en el archivo
     const head = new Uint8Array(buf, 0, Math.min(len, 2048));
     let headTxt = "";
     for (let i = 0; i < head.length; i++) headTxt += String.fromCharCode(head[i]);
+    headTxt = headTxt.replace(/^\xEF\xBB\xBF/, "");                // BOM de UTF-8
     const looksAscii = /^\s*solid/i.test(headTxt) && /facet|vertex|endsolid/i.test(headTxt);
-    let tri, n;
-    if (nBin > 0 && len === 84 + 50 * nBin) binary();
-    else if (looksAscii) ascii();
-    else if (nBin > 0 && len >= 84 + 50 * nBin) binary();
-    else throw new Error("El archivo no parece un STL válido (ni binario ni de texto).");
+    let tri = null, n = 0;
 
-    function binary() {
-      n = nBin; tri = new Float32Array(9 * n);
+    function binary(count) {
+      n = count; tri = new Float32Array(9 * n);
       for (let t = 0; t < n; t++) {
         const o = 84 + 50 * t + 12;            // se salta la normal
         for (let k = 0; k < 9; k++) tri[9 * t + k] = dv.getFloat32(o + 4 * k, true);
@@ -61,12 +59,27 @@
       let txt;
       try { txt = new TextDecoder("utf-8").decode(new Uint8Array(buf)); }
       catch (e) { throw new Error("El STL de texto es demasiado grande para este navegador. Expórtalo como STL binario."); }
-      const re = /vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g;
+      // faceta a faceta: una faceta con un valor ilegible se descarta entera y no desplaza a las siguientes
       const v = [];
+      const reLoop = /outer\s+loop([\s\S]*?)endloop/gi, reV = /vertex\s+(\S+)\s+(\S+)\s+(\S+)/gi;
       let m;
-      while ((m = re.exec(txt)) !== null) v.push(+m[1], +m[2], +m[3]);
-      n = Math.floor(v.length / 9);
-      tri = new Float32Array(v.slice(0, 9 * n));
+      while ((m = reLoop.exec(txt)) !== null) {
+        const f = [];
+        let q;
+        reV.lastIndex = 0;
+        while ((q = reV.exec(m[1])) !== null) f.push(Number(q[1]), Number(q[2]), Number(q[3]));
+        if (f.length === 9 && f.every(Number.isFinite)) for (let k = 0; k < 9; k++) v.push(f[k]);
+      }
+      n = v.length / 9;
+      tri = new Float32Array(v);
+    }
+
+    if (nHead > 0 && len === 84 + 50 * nHead) binary(nHead);
+    else {
+      if (looksAscii) ascii();
+      // binario con cabecera 'solid', con bytes de mas o con un conteo que no cuadra con el tamano
+      if (!n && nFit > 0) binary(nHead > 0 ? Math.min(nHead, nFit) : nFit);
+      if (!n && !looksAscii && !(nFit > 0)) throw new Error("El archivo no parece un STL válido (ni binario ni de texto).");
     }
 
     // se descartan los triangulos con coordenadas no finitas
@@ -74,7 +87,7 @@
     const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
     for (let t = 0; t < n; t++) {
       let ok = true;
-      for (let q = 0; q < 9; q++) if (!Number.isFinite(tri[9 * t + q])) { ok = false; break; }
+      for (let q = 0; q < 9; q++) if (!Number.isFinite(tri[9 * t + q]) || Math.abs(tri[9 * t + q]) > 1e9) { ok = false; break; }
       if (!ok) continue;
       for (let q = 0; q < 9; q++) {
         const val = tri[9 * t + q], a = q % 3;
@@ -84,7 +97,7 @@
       }
       k++;
     }
-    if (!k) throw new Error("El STL no contiene triángulos válidos.");
+    if (!k) throw new Error(looksAscii || nFit > 0 ? "El STL no contiene triángulos válidos." : "El archivo no parece un STL válido (ni binario ni de texto).");
     return { tri: k === n ? tri : tri.slice(0, 9 * k), n: k, min, max };
   }
 
@@ -118,6 +131,7 @@
     if (!(S.sizeU > 0) || !(S.sizeV > 0)) throw new Error("Visto desde arriba el modelo no tiene ancho o alto. Prueba con otro eje vertical.");
     const su = S.sizeU / w, sv = S.sizeV / h;
     const top = new Float32Array(w * h).fill(-Infinity);
+    const fill = new Float32Array(w * h).fill(-Infinity);
     const P = new Float64Array(9);
     for (let q = 0; q < t.length; q += 9) {
       for (let k = 0; k < 3; k++) {
@@ -125,15 +139,22 @@
         P[3 * k] = (A.u(x, y, z) - S.u0) / su - 0.5;       // centros de pixel en enteros
         P[3 * k + 1] = (S.v1 - A.v(x, y, z)) / sv - 0.5;
         P[3 * k + 2] = A.z(x, y, z);
-        // cada vertice cuenta en su pixel: asi no se pierden triangulos mas pequenos que un pixel
-        const ix = Math.min(w - 1, Math.max(0, Math.round(P[3 * k]))), iy = Math.min(h - 1, Math.max(0, Math.round(P[3 * k + 1])));
-        if (P[3 * k + 2] > top[iy * w + ix]) top[iy * w + ix] = P[3 * k + 2];
       }
       const ax = P[0], ay = P[1], az = P[2], bx = P[3], by = P[4], bz = P[5], cx = P[6], cy = P[7], cz = P[8];
       const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
       if (!(Math.abs(area) > 1e-12)) continue;               // pared vertical: no tapa nada
       const x0 = Math.max(0, Math.ceil(Math.min(ax, bx, cx))), x1 = Math.min(w - 1, Math.floor(Math.max(ax, bx, cx)));
       const y0 = Math.max(0, Math.ceil(Math.min(ay, by, cy))), y1 = Math.min(h - 1, Math.floor(Math.max(ay, by, cy)));
+      if (x0 > x1 || y0 > y1) {
+        // triangulo que no contiene ningun centro de pixel (mas pequeno que un pixel): su centroide vale para
+        // el pixel donde cae, pero solo si ningun triangulo grande cubre ese pixel
+        const gx = (ax + bx + cx) / 3, gy = (ay + by + cy) / 3;
+        if (gx > -0.5 && gx < w - 0.5 && gy > -0.5 && gy < h - 0.5) {
+          const o = Math.round(gy) * w + Math.round(gx), gz = (az + bz + cz) / 3;
+          if (gz > fill[o]) fill[o] = gz;
+        }
+        continue;
+      }
       for (let iy = y0; iy <= y1; iy++) {
         for (let ix = x0; ix <= x1; ix++) {
           const w0 = ((bx - ix) * (cy - iy) - (by - iy) * (cx - ix)) / area;
@@ -146,6 +167,7 @@
         }
       }
     }
+    for (let i = 0; i < top.length; i++) if (top[i] === -Infinity) top[i] = fill[i];
     // la escala va de lo mas bajo que se ve desde arriba a lo mas alto (la base de debajo no cuenta)
     let zLo = Infinity, zHi = -Infinity, covered = 0;
     for (let i = 0; i < top.length; i++) {
