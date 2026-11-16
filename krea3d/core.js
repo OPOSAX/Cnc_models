@@ -200,6 +200,42 @@
       if (p.darkHigh) t = 1 - t;               // oscuro = alto
       v[i] = Math.pow(t, g);
     }
+    // volumen escultorico: separa la ESCENA (variacion a gran escala, p. ej. figuras
+    // lejanas mas hundidas) del VOLUMEN LOCAL de cada figura; comprime la primera y
+    // amplifica el segundo. Es la compresion no lineal clasica de los relieves tallados:
+    // las figuras conservan su bulto redondo aunque la profundidad total sea de 25 mm.
+    const sc = p.sculpt || 0;
+    if (sc > 0) {
+      const rf = Math.max(2, Math.round(Math.min(w, h) / 5));
+      let big = boxBlur(v, w, h, rf);
+      big = boxBlur(big, w, h, rf);
+      const wScene = 1 - 0.7 * sc;             // cuanto sobrevive la profundidad de escena
+      const gain = 1 + 2.5 * sc;               // cuanto se amplifica el bulto local
+      const out = new Float32Array(v.length);
+      for (let i = 0; i < v.length; i++) {
+        const t = big[i] * wScene + 0.5 * (1 - wScene) + (v[i] - big[i]) * gain;
+        out[i] = t < 0 ? 0 : t > 1 ? 1 : t;
+      }
+      v = out;
+    }
+    // realce del relieve en DOS BANDAS (equalizacion multiescala, como los programas
+    // de relieve profesionales): la banda fina (~4 mm) levanta los rasgos de las caras,
+    // dedos y texturas; la banda media (~14 mm) refuerza narices, brazos y pliegues.
+    // La profundidad total no cambia.
+    const boost = p.boost || 0;
+    if (boost > 0) {
+      const r1 = Math.max(1, Math.round(4 / res));
+      const r2 = Math.max(r1 + 1, Math.round(14 / res));
+      let b1 = boxBlur(v, w, h, r1); b1 = boxBlur(b1, w, h, r1);
+      let b2 = boxBlur(v, w, h, r2); b2 = boxBlur(b2, w, h, r2);
+      const gFine = 1 + 1.2 * boost, gMid = 1 + 0.55 * boost;
+      const out = new Float32Array(v.length);
+      for (let i = 0; i < v.length; i++) {
+        const t = b2[i] + (b1[i] - b2[i]) * gMid + (v[i] - b1[i]) * gFine;
+        out[i] = t < 0 ? 0 : t > 1 ? 1 : t;
+      }
+      v = out;
+    }
     const r = Math.round((p.smoothMm || 0) / res);
     if (r >= 1) { v = boxBlur(v, w, h, r); v = boxBlur(v, w, h, r); }
     const H = new Float32Array(v.length);

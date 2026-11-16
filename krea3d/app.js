@@ -6,8 +6,9 @@
   const num = (id) => { const s = String($(id).value).trim(); return s === "" ? NaN : Number(s); };
   const fin = Number.isFinite;
   const MAX_IMG_PX = 16e6, MAX_IMG_SIDE = 8192;   // la rejilla nunca necesita mas detalle que esto
-  let src = null;          // canvas con la imagen original (o la vista desde arriba del STL)
-  let mesh = null;         // STL cargado ({tri, n, ...}) o null si la fuente es una imagen
+  let src = null;          // canvas con la imagen original (modo artistico, 8 bits; o la vista desde arriba del STL)
+  let srcField = null;     // campo de alturas {w,h,data} (heightmap 16 bits o IA, modo pro)
+  let mesh = null;         // STL cargado ({tri, n, ...}) o null; se rasteriza exacto en la rejilla de corte
   let meshCache = null;    // { key, hm } ultimo mapa de alturas del STL
   let meshUp = "z";        // eje vertical con el que se esta usando el STL
   let srcId = 0;           // cambia con cada imagen cargada
@@ -60,9 +61,10 @@
   function syncFromH() { const H = num("Hh"); if (fin(H) && H > 0) $("W").value = Math.max(1, Math.round(H * aspect)); }
 
   function setSource(canvas, label, note, asp) {
-    src = canvas; srcId++; aspect = asp || canvas.width / canvas.height;
+    src = canvas; srcField = null; srcId++; aspect = asp || canvas.width / canvas.height;
     $("imgTag").textContent = label;
     $("imgNote").textContent = note || ""; $("imgNote").hidden = !note;
+    $("iaBtn").hidden = !window.KreaDepth; $("hmSave").hidden = true; $("iaMsg").hidden = true;
     if ($("lock").checked) syncFromW();
     refresh();
   }
@@ -96,6 +98,13 @@
       `Si el relieve sale de lado o al revés, cambia el eje vertical.`;
     setGenError("");
     setSource(r.c, label, note, r.aspect);
+    $("iaBtn").hidden = true; $("hmSave").hidden = false;   // la IA no tiene sentido sobre un STL; el heightmap si
+  }
+  /** Mapa de alturas del STL actual para exportarlo (lado mayor 2000 px). */
+  function meshField() {
+    const S = Krea.stlSize(mesh, meshUp), k = 2000 / Math.max(S.sizeU, S.sizeV);
+    const w = Math.max(2, Math.round(S.sizeU * k)), h = Math.max(2, Math.round(S.sizeV * k));
+    return { w, h, data: Krea.rasterSTL(mesh, meshUp, w, h).hm };
   }
   /** Profundidad para que el modelo quede a escala real con el ancho actual del mural (medida en la rejilla real). */
   function stlScaleDepth() {
@@ -112,6 +121,7 @@
     refresh();
   }
   function loadSTL(file) {
+    if (file.size > 400e6) { setGenError("El STL pesa más de 400 MB: expórtalo con menos caras."); return; }
     file.arrayBuffer().then((buf) => {
       let m;
       try { m = Krea.parseSTL(buf); }
@@ -125,8 +135,13 @@
         } catch (e) { continue; }
         $("darkHigh").checked = false;        // en un STL lo alto ya es claro
         $("smoothMm").value = 0;              // las alturas del STL son exactas: sin suavizado por defecto
+        $("sculpt").value = 0; $("boost").value = 0;   // sin volumen escultorico ni realce: se talla el modelo tal cual
         const base = baseName(file);
         if (base) $("name").value = base;
+        // escala real: ancho del modelo y profundidad de su relieve visible (se pueden cambiar despues)
+        const S = Krea.stlSize(m, meshUp);
+        if (S.sizeU >= 10) { $("W").value = Math.round(S.sizeU); if ($("lock").checked) syncFromW(); }
+        stlScaleDepth();
         refresh();
         return;
       }
@@ -134,9 +149,45 @@
     }, () => setGenError("No se pudo leer el archivo STL."));
   }
 
+  /** Fuente profesional: campo de alturas real (heightmap 16 bits, STL o IA). */
+  function setFieldSource(field, label, note) {
+    srcField = field; src = null; srcId++; aspect = field.w / field.h;
+    mesh = null; meshCache = null; $("stlBox").hidden = true;
+    $("imgTag").textContent = label;
+    $("imgNote").textContent = note || ""; $("imgNote").hidden = !note;
+    $("iaBtn").hidden = true; $("hmSave").hidden = false;
+    if ($("lock").checked) syncFromW();
+    refresh();
+  }
+
+
+  /** Despacho por tipo: STL -> rasterizar; PNG -> 16 bits si lo es; resto -> imagen de 8 bits. */
   function loadFile(file) {
-    if (file && /\.stl$/i.test(file.name)) { loadSTL(file); return; }
-    if (!file || !file.type.startsWith("image/")) { setGenError("Ese archivo no es una imagen ni un STL. Usa JPG, PNG o STL."); return; }
+    if (!file) return;
+    const n = (file.name || "").toLowerCase();
+    if (n.endsWith(".stl")) { loadSTL(file); return; }
+    if (n.endsWith(".png") || file.type === "image/png") { loadPng(file); return; }
+    if (file.type.startsWith("image/")) { loadImageFile(file); return; }
+    setGenError("Formato no reconocido. Usa un heightmap PNG de 16 bits, un modelo STL, o una imagen JPG/PNG (modo artístico).");
+  }
+
+  function loadPng(file) {
+    const fr = new FileReader();
+    fr.onload = () => {
+      let hm = null;
+      try { hm = KreaInput.decodePng16(fr.result); }
+      catch (e) { setGenError("No se pudo leer el heightmap: " + (e && e.message || e)); return; }
+      if (!hm) { loadImageFile(file); return; }        // PNG normal de 8 bits: modo artistico
+      setGenError("");
+      const base = baseName(file); if (base) $("name").value = base;
+      setFieldSource(hm, `heightmap 16 bits · ${hm.w} × ${hm.h} px`,
+        "Modo profesional: heightmap de 16 bits (65.536 niveles de altura reales). Blanco = superficie, negro = fondo del tallado.");
+    };
+    fr.onerror = () => setGenError("No se pudo leer el archivo PNG.");
+    fr.readAsArrayBuffer(file);
+  }
+
+  function loadImageFile(file) {
     const url = URL.createObjectURL(file);
     const im = new Image();
     im.onload = () => {
@@ -162,14 +213,16 @@
       mesh = null; meshCache = null; $("stlBox").hidden = true;
       const base = baseName(file);
       if (base) $("name").value = base;
-      const note = k < 1 ? `Imagen muy grande (${nw} × ${nh} px): se ha reducido a ${cw} × ${ch} px para poder procesarla. Sigue teniendo más detalle del que usa la rejilla.` : "";
-      setSource(c, k < 1 ? `${nw} × ${nh} px → ${cw} × ${ch}` : `${nw} × ${nh} px`, note);
+      let note = "Modo artístico: el brillo de la imagen se usa como altura (claro = alto, oscuro = profundo), así que las sombras de una foto se tallan como hoyos. " +
+        "Para un relieve profesional con alturas reales carga un heightmap PNG de 16 bits o un modelo STL.";
+      if (k < 1) note = `Imagen muy grande (${nw} × ${nh} px): se ha reducido a ${cw} × ${ch} px para poder procesarla. ` + note;
+      setSource(c, k < 1 ? `imagen 8 bits · ${nw} × ${nh} px → ${cw} × ${ch}` : `imagen 8 bits · ${nw} × ${nh} px`, note);
     };
     im.onerror = () => { URL.revokeObjectURL(url); setGenError("No se pudo leer la imagen."); };
     im.src = url;
   }
 
-  /** Luminancia 0..1 de la imagen remuestreada a w×h. */
+  /** Alturas 0..1 remuestreadas a w×h: campo real (16 bits / STL) o luminancia de la imagen. */
   function luminance(w, h) {
     if (mesh) {
       // STL: alturas exactas del modelo en la rejilla pedida (sin pasar por 8 bits de un canvas)
@@ -177,6 +230,7 @@
       if (!meshCache || meshCache.key !== key) meshCache = { key, hm: Krea.rasterSTL(mesh, meshUp, w, h).hm };
       return meshCache.hm.slice();
     }
+    if (srcField) return KreaInput.resample(srcField, w, h);
     const c = document.createElement("canvas"); c.width = w; c.height = h;
     const g = c.getContext("2d", { willReadFrequently: true });
     g.fillStyle = "#fff"; g.fillRect(0, 0, w, h);
@@ -194,7 +248,7 @@
     return {
       name: ($("name").value.trim() || "mural").replace(/[^\w-]+/g, "_"),
       W: num("W"), H: num("Hh"), depth: num("depth"), thick: num("thick"), res: num("res"),
-      darkHigh: $("darkHigh").checked, gamma: num("gamma"),
+      darkHigh: $("darkHigh").checked, gamma: num("gamma"), boost: num("boost"), sculpt: num("sculpt"),
       blackPoint: num("blackPoint") / 100, whitePoint: num("whitePoint") / 100, smoothMm: num("smoothMm"),
       rough: { on: $("roughOn").checked, tool: { type: "flat", d: num("rD") }, stepdown: num("rStep"),
         stepoverPct: num("rOver"), allowance: num("rAllow"), feed: num("rF"), plunge: num("rFz"), rpm: Math.round(num("rS")) },
@@ -325,12 +379,12 @@
   const fmtLines = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + " M" : Math.round(n).toLocaleString("es");
   const keyOf = (p) => srcId + "|" + JSON.stringify(p);
 
-  function updateGenButton() { $("gen").disabled = running || currentBad || !src; }
+  function updateGenButton() { $("gen").disabled = running || currentBad || (!src && !srcField); }
 
   // ---------------------------------------------------------- vista previa
   let prevH = null, prevW = 0, prevHh = 0;
   function refresh() {
-    if (!src) return;
+    if (!src && !srcField) return;
     const p = params();
     const alerts = check(p);
     currentBad = alerts.some((x) => x.bad);
@@ -342,6 +396,8 @@
     $("fmtTag").textContent = p.format === "chaoda" ? "Chaoda" : "Genérico";
     $("fAngleBox").hidden = p.finish.tool.type !== "v";
     $("gammaV").textContent = (+p.gamma).toFixed(2);
+    $("boostV").textContent = (+p.boost || 0).toFixed(1);
+    $("sculptV").textContent = (+p.sculpt || 0).toFixed(2);
     $("bpV").textContent = Math.round(p.blackPoint * 100);
     $("wpV").textContent = Math.round(p.whitePoint * 100);
     const sizeOk = fin(p.W) && fin(p.H) && p.W > 0 && p.H > 0;
@@ -360,7 +416,7 @@
     if (!sizeOk) return;
 
     const cv = $("cv2d");
-    const maxW = 900, maxH = 560;
+    const maxW = 1500, maxH = 1150;
     const s = Math.min(maxW / p.W, maxH / p.H);
     const w = Math.max(20, Math.round(p.W * s)), h = Math.max(20, Math.round(p.H * s));
     const res = p.W / w;
@@ -395,18 +451,29 @@
     const p = params();
     if (!(p.W > 0 && p.H > 0)) return;
     if (!three) {
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
       renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderer.domElement.setAttribute("role", "img");
       renderer.domElement.setAttribute("aria-label", "Vista 3D del relieve; arrastra para girarla");
       el.appendChild(renderer.domElement);
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(35, 1, 1, 20000);
-      scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.55));
-      const sun = new THREE.DirectionalLight(0xffffff, 0.9); sun.position.set(-1, 1.2, 1.4); scene.add(sun);
+      // iluminacion de estudio: clave suave + relleno + ambiente calido, como el render
+      // de referencia (sombras tenues, nada de negros duros)
+      scene.add(new THREE.HemisphereLight(0xfff4e4, 0x5a5048, 0.85));
+      const sun = new THREE.DirectionalLight(0xfff0dd, 0.55);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(2048, 2048);
+      sun.shadow.bias = -0.0005;
+      sun.shadow.radius = 5;
+      scene.add(sun); scene.add(sun.target);
+      const fill = new THREE.DirectionalLight(0xdde8ff, 0.3);
+      scene.add(fill);
       const controls = THREE.OrbitControls ? new THREE.OrbitControls(camera, renderer.domElement) : null;
       if (controls) controls.enableDamping = true;
-      three = { renderer, scene, camera, controls, mesh: null };
+      three = { renderer, scene, camera, controls, sun, fill, mesh: null };
       const loop = () => {
         requestAnimationFrame(loop);
         if (el.hidden) return;
@@ -419,7 +486,7 @@
       };
       loop();
     }
-    const sx = Math.max(2, Math.min(prevW - 1, 360)), sy = Math.max(2, Math.round(sx * prevHh / prevW));
+    const sx = Math.max(2, Math.min(prevW - 1, 950)), sy = Math.max(2, Math.round(sx * prevHh / prevW));
     const geo = new THREE.PlaneGeometry(p.W, p.H, sx, sy);
     const pos = geo.attributes.position;
     for (let j = 0; j <= sy; j++) for (let i = 0; i <= sx; i++) {
@@ -427,13 +494,91 @@
       pos.setZ(j * (sx + 1) + i, prevH[rj * prevW + ci]);
     }
     geo.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({ color: 0xc9a06a, roughness: 0.85, metalness: 0 });
+    // mapa de normales a resolucion COMPLETA de la vista previa: el filo de cada borde
+    // se sombrea por pixel, como en los visores profesionales, aunque la malla sea menor
+    const nmW = prevW, nmH = prevHh;
+    const nmData = new Uint8Array(nmW * nmH * 4);
+    const resPrev = p.W / prevW;
+    for (let yT = 0; yT < nmH; yT++) {
+      const r0 = nmH - 1 - yT;                               // DataTexture: fila 0 = v0 = abajo
+      for (let x = 0; x < nmW; x++) {
+        const xl = Math.max(0, x - 1), xr = Math.min(nmW - 1, x + 1);
+        const rU = Math.max(0, r0 - 1), rD = Math.min(nmH - 1, r0 + 1);
+        const dzdx = (prevH[r0 * nmW + xr] - prevH[r0 * nmW + xl]) / ((xr - xl) * resPrev);
+        const dzdy = (prevH[rU * nmW + x] - prevH[rD * nmW + x]) / ((rD - rU) * resPrev);
+        const il = 1 / Math.hypot(dzdx, dzdy, 1);
+        const o = (yT * nmW + x) * 4;
+        nmData[o] = Math.round((-dzdx * il * 0.5 + 0.5) * 255);
+        nmData[o + 1] = Math.round((-dzdy * il * 0.5 + 0.5) * 255);
+        nmData[o + 2] = Math.round((il * 0.5 + 0.5) * 255);
+        nmData[o + 3] = 255;
+      }
+    }
+    const nmTex = new THREE.DataTexture(nmData, nmW, nmH, THREE.RGBAFormat);
+    nmTex.magFilter = THREE.LinearFilter;
+    nmTex.minFilter = THREE.LinearFilter;
+    nmTex.needsUpdate = true;
+    if (three.nmTex) three.nmTex.dispose();
+    three.nmTex = nmTex;
+    const mat = new THREE.MeshStandardMaterial({
+      color: 0xd8c4a0, roughness: 0.92, metalness: 0,
+      normalMap: nmTex, normalScale: new THREE.Vector2(1, -1),
+    });
     if (three.mesh) { three.scene.remove(three.mesh); three.mesh.geometry.dispose(); }
     three.mesh = new THREE.Mesh(geo, mat);
+    three.mesh.castShadow = true;
+    three.mesh.receiveShadow = true;
     three.scene.add(three.mesh);
+    // tablero solido debajo del relieve (faldon perimetral + fondo): sin esto, de lado
+    // la superficie tallada parece una lamina con puas en vez de un bloque macizo
+    if (three.skirt) { three.scene.remove(three.skirt); three.skirt.geometry.dispose(); }
+    {
+      const thick = fin(p.thick) && p.thick > p.depth ? p.thick : p.depth + 10;
+      const zb = -thick;
+      const X2 = (i) => -p.W / 2 + i / sx * p.W;
+      const Y2 = (j) => p.H / 2 - j / sy * p.H;
+      const zAt = (i, j) => {
+        const ci = Math.min(prevW - 1, Math.round(i / sx * (prevW - 1)));
+        const rj = Math.min(prevHh - 1, Math.round(j / sy * (prevHh - 1)));
+        return prevH[rj * prevW + ci];
+      };
+      const per = [];
+      for (let i = 0; i <= sx; i++) per.push([X2(i), Y2(0), zAt(i, 0)]);
+      for (let j = 1; j <= sy; j++) per.push([X2(sx), Y2(j), zAt(sx, j)]);
+      for (let i = sx - 1; i >= 0; i--) per.push([X2(i), Y2(sy), zAt(i, sy)]);
+      for (let j = sy - 1; j >= 1; j--) per.push([X2(0), Y2(j), zAt(0, j)]);
+      per.push(per[0]);
+      const segs = per.length - 1;
+      const posArr = new Float32Array((segs * 2 + 2) * 9);
+      let o = 0;
+      const tri = (a, b, c) => { posArr.set(a, o); posArr.set(b, o + 3); posArr.set(c, o + 6); o += 9; };
+      for (let s = 0; s < segs; s++) {
+        const a = per[s], b = per[s + 1];
+        const ab = [a[0], a[1], zb], bb = [b[0], b[1], zb];
+        tri(a, ab, bb);
+        tri(a, bb, b);
+      }
+      const c1 = [-p.W / 2, p.H / 2, zb], c2 = [p.W / 2, p.H / 2, zb], c3 = [p.W / 2, -p.H / 2, zb], c4 = [-p.W / 2, -p.H / 2, zb];
+      tri(c1, c3, c2);
+      tri(c1, c4, c3);
+      const sg = new THREE.BufferGeometry();
+      sg.setAttribute("position", new THREE.BufferAttribute(posArr, 3));
+      sg.computeVertexNormals();
+      three.skirt = new THREE.Mesh(sg, new THREE.MeshStandardMaterial({ color: 0xc3ab85, roughness: 0.95, metalness: 0 }));
+      three.skirt.castShadow = true;
+      three.skirt.receiveShadow = true;
+      three.scene.add(three.skirt);
+    }
     three.scene.background = new THREE.Color(getComputedStyle(document.documentElement).getPropertyValue("--stage").trim() || "#2b3237");
     const R = Math.max(p.W, p.H);
-    if (!three.placed) { three.camera.position.set(-0.25 * R, -0.9 * R, 1.25 * R); three.placed = true; }
+    // clave en diagonal suave (como el render de referencia) + relleno opuesto frio tenue
+    three.sun.position.set(-0.45 * R, 0.55 * R, 0.8 * R);
+    three.sun.target.position.set(0, 0, 0);
+    three.fill.position.set(0.6 * R, -0.3 * R, 0.7 * R);
+    const sc = three.sun.shadow.camera;
+    sc.left = -R; sc.right = R; sc.top = R; sc.bottom = -R; sc.near = 0.1; sc.far = 4 * R;
+    sc.updateProjectionMatrix();
+    if (!three.placed) { three.camera.position.set(-0.08 * R, -0.35 * R, 1.3 * R); three.placed = true; }
     three.camera.lookAt(0, 0, 0);
   }
 
@@ -691,8 +836,71 @@
   });
   $("stlScale").onclick = stlScaleDepth;
 
+  // ---------------------------------------------------------- IA de profundidad
+  $("iaBtn").onclick = async () => {
+    if (!src || !window.KreaDepth) return;
+    const btn = $("iaBtn"), msg = $("iaMsg");
+    btn.disabled = true; msg.hidden = false;
+    msg.textContent = "Cargando el modelo de IA (~50 MB, solo la primera vez)…";
+    const canvas = src;
+    try {
+      const raw = await KreaDepth.estimate(canvas, (fase, pct) => {
+        msg.textContent = fase === "descarga"
+          ? `Descargando el modelo de IA… ${Math.round(pct)} % (solo la primera vez; todo se calcula en tu navegador, la imagen no se sube a ningún sitio)`
+          : "Calculando la profundidad…";
+      });
+      // al aspecto exacto de la imagen, ampliado en bilineal
+      const w2 = Math.min(1024, Math.max(raw.w, canvas.width));
+      const h2 = Math.max(2, Math.round(w2 * canvas.height / canvas.width));
+      const field = { w: w2, h: h2, data: KreaInput.resample(raw, w2, h2) };
+      msg.hidden = true;
+      setFieldSource(field, `IA profundidad · ${w2} × ${h2}`,
+        "Heightmap generado con IA (Depth Anything) en tu navegador: lo cercano queda alto. " +
+        "Si sale al revés, marca «Invertir». Revisa la Vista 3D y, si te gusta, descarga el heightmap de 16 bits para guardarlo o retocarlo.");
+    } catch (e) {
+      msg.hidden = true;
+      setGenError("No se pudo estimar la profundidad: " + (e && e.message || e) + ". La primera vez se necesita conexión a internet para descargar el modelo.");
+    }
+    btn.disabled = false;
+  };
+
+  $("hmSave").onclick = () => {
+    if (!srcField && !mesh) return;
+    try { save(($("name").value.trim() || "mural") + "_heightmap16.png", KreaInput.encodePng16(srcField || meshField())); }
+    catch (e) { setGenError("No se pudo crear el PNG de 16 bits: " + (e && e.message || e)); }
+  };
+
+  // exporta el relieve TAL COMO SE VE (con contraste, invertir y suavizado aplicados),
+  // como solido en mm, para trabajarlo en otro software (Blender, Aspire, etc.)
+  $("stlSave").onclick = () => {
+    const p = params();
+    if (!prevH) { setGenError("Carga primero una fuente para exportar el STL."); return; }
+    if (!(fin(p.W) && p.W > 0 && fin(p.H) && p.H > 0 && fin(p.depth) && p.depth > 0)) {
+      setGenError("Revisa el ancho, el alto y la profundidad antes de exportar el STL."); return;
+    }
+    try {
+      const blob = KreaInput.encodeStl({ w: prevW, h: prevHh, data: prevH }, p.W, p.H, p.depth);
+      save((p.name || "mural") + ".stl", blob);
+    } catch (e) { setGenError("No se pudo crear el STL: " + (e && e.message || e)); }
+  };
+
   if (/claude\.ai|claudeusercontent|anthropic/.test(location.hostname)) $("sandboxNote").hidden = false;
 
   setTab("2d");
-  setSource(sampleImage(), "ejemplo");
+  // ejemplo inicial: mural romano como heightmap de 16 bits (muestra el modo profesional);
+  // si no se puede cargar, queda el dibujo generado como respaldo
+  (async () => {
+    try {
+      const r = await fetch("ejemplo.png");
+      if (!r.ok) throw new Error("sin ejemplo");
+      const hm = KreaInput.decodePng16(await r.arrayBuffer());
+      if (!hm) throw new Error("ejemplo no es de 16 bits");
+      setFieldSource(hm, "ejemplo · mural romano",
+        "Ejemplo: heightmap de 16 bits de un mural romano, con el ajuste escultórico activado. " +
+        "Gira la Vista 3D con el mouse. Carga tu propio archivo para reemplazarlo.");
+      setTab("3d");                      // la vista 3D muestra el volumen real
+    } catch (e) {
+      setSource(sampleImage(), "ejemplo");
+    }
+  })();
 })();
