@@ -11,6 +11,8 @@
   let mesh = null;         // STL cargado ({tri, n, ...}) o null; se rasteriza exacto en la rejilla de corte
   let meshCache = null;    // { key, hm } ultimo mapa de alturas del STL
   let meshUp = "z";        // eje vertical con el que se esta usando el STL
+  let stlSaved = null;     // ajustes de imagen del usuario guardados mientras hay un STL cargado
+  let loadSeq = 0;         // cada archivo elegido invalida las cargas anteriores que aun no han terminado
   let srcId = 0;           // cambia con cada imagen cargada
   let aspect = 1;
   let lastFiles = [];
@@ -120,9 +122,27 @@
     $("depth").value = +(r.relief * gr.W / S.sizeU).toFixed(2);
     refresh();
   }
-  function loadSTL(file) {
+  /** Con un STL se talla el modelo tal cual: sin realce, volumen, suavizado ni inversion. Los ajustes del
+      usuario se guardan al entrar y se devuelven al cargar otra fuente. */
+  const STL_KEYS = ["sculpt", "boost", "smoothMm"];
+  function stlSettingsOn() {
+    if (!stlSaved) {
+      stlSaved = { darkHigh: $("darkHigh").checked };
+      for (const k of STL_KEYS) stlSaved[k] = $(k).value;
+    }
+    $("darkHigh").checked = false;
+    for (const k of STL_KEYS) $(k).value = 0;
+  }
+  function stlSettingsOff() {
+    if (!stlSaved) return;
+    $("darkHigh").checked = stlSaved.darkHigh;
+    for (const k of STL_KEYS) $(k).value = stlSaved[k];
+    stlSaved = null;
+  }
+  function loadSTL(file, seq) {
     if (file.size > 400e6) { setGenError("El STL pesa más de 400 MB: expórtalo con menos caras."); return; }
     file.arrayBuffer().then((buf) => {
+      if (seq !== loadSeq) return;            // ya se eligio otro archivo
       let m;
       try { m = Krea.parseSTL(buf); }
       catch (e) { setGenError(String(e && e.message || e)); return; }
@@ -133,9 +153,7 @@
         try {
           applyStl(m, up, label, up !== want ? `Con el eje ${want.toUpperCase()} hacia arriba el modelo no tiene planta: se usa ${up.toUpperCase()}.` : "");
         } catch (e) { continue; }
-        $("darkHigh").checked = false;        // en un STL lo alto ya es claro
-        $("smoothMm").value = 0;              // las alturas del STL son exactas: sin suavizado por defecto
-        $("sculpt").value = 0; $("boost").value = 0;   // sin volumen escultorico ni realce: se talla el modelo tal cual
+        stlSettingsOn();                      // lo alto ya es claro y las alturas son exactas
         const base = baseName(file);
         if (base) $("name").value = base;
         // escala real: ancho del modelo y profundidad de su relieve visible (se pueden cambiar despues)
@@ -146,12 +164,13 @@
         return;
       }
       setGenError("Ese STL no tiene superficie visible desde ningún eje (es plano o está vacío).");
-    }, () => setGenError("No se pudo leer el archivo STL."));
+    }, () => { if (seq === loadSeq) setGenError("No se pudo leer el archivo STL."); });
   }
 
   /** Fuente profesional: campo de alturas real (heightmap 16 bits, STL o IA). */
   function setFieldSource(field, label, note) {
     srcField = field; src = null; srcId++; aspect = field.w / field.h;
+    if (mesh) stlSettingsOff();
     mesh = null; meshCache = null; $("stlBox").hidden = true;
     $("imgTag").textContent = label;
     $("imgNote").textContent = note || ""; $("imgNote").hidden = !note;
@@ -164,34 +183,37 @@
   /** Despacho por tipo: STL -> rasterizar; PNG -> 16 bits si lo es; resto -> imagen de 8 bits. */
   function loadFile(file) {
     if (!file) return;
+    const seq = ++loadSeq;                    // las cargas anteriores que sigan en curso se descartan
     const n = (file.name || "").toLowerCase();
-    if (n.endsWith(".stl")) { loadSTL(file); return; }
-    if (n.endsWith(".png") || file.type === "image/png") { loadPng(file); return; }
-    if (file.type.startsWith("image/")) { loadImageFile(file); return; }
+    if (n.endsWith(".stl")) { loadSTL(file, seq); return; }
+    if (n.endsWith(".png") || file.type === "image/png") { loadPng(file, seq); return; }
+    if (file.type.startsWith("image/")) { loadImageFile(file, seq); return; }
     setGenError("Formato no reconocido. Usa un heightmap PNG de 16 bits, un modelo STL, o una imagen JPG/PNG (modo artístico).");
   }
 
-  function loadPng(file) {
+  function loadPng(file, seq) {
     const fr = new FileReader();
     fr.onload = () => {
+      if (seq !== loadSeq) return;
       let hm = null;
       try { hm = KreaInput.decodePng16(fr.result); }
       catch (e) { setGenError("No se pudo leer el heightmap: " + (e && e.message || e)); return; }
-      if (!hm) { loadImageFile(file); return; }        // PNG normal de 8 bits: modo artistico
+      if (!hm) { loadImageFile(file, seq); return; }        // PNG normal de 8 bits: modo artistico
       setGenError("");
       const base = baseName(file); if (base) $("name").value = base;
       setFieldSource(hm, `heightmap 16 bits · ${hm.w} × ${hm.h} px`,
         "Modo profesional: heightmap de 16 bits (65.536 niveles de altura reales). Blanco = superficie, negro = fondo del tallado.");
     };
-    fr.onerror = () => setGenError("No se pudo leer el archivo PNG.");
+    fr.onerror = () => { if (seq === loadSeq) setGenError("No se pudo leer el archivo PNG."); };
     fr.readAsArrayBuffer(file);
   }
 
-  function loadImageFile(file) {
+  function loadImageFile(file, seq) {
     const url = URL.createObjectURL(file);
     const im = new Image();
     im.onload = () => {
       URL.revokeObjectURL(url);
+      if (seq !== loadSeq) return;
       const nw = im.naturalWidth, nh = im.naturalHeight;
       if (!(nw > 0 && nh > 0)) { setGenError("No se pudo leer la imagen."); return; }
       // las imagenes enormes no caben en un canvas: se reducen (la rejilla nunca usa tanto detalle)
@@ -210,6 +232,7 @@
       }
       if (!ok) { setGenError("La imagen es demasiado grande para este navegador. Redúcela (por ejemplo a 4000 px de lado) y vuelve a cargarla."); return; }
       setGenError("");
+      if (mesh) stlSettingsOff();
       mesh = null; meshCache = null; $("stlBox").hidden = true;
       const base = baseName(file);
       if (base) $("name").value = base;
@@ -218,7 +241,7 @@
       if (k < 1) note = `Imagen muy grande (${nw} × ${nh} px): se ha reducido a ${cw} × ${ch} px para poder procesarla. ` + note;
       setSource(c, k < 1 ? `imagen 8 bits · ${nw} × ${nh} px → ${cw} × ${ch}` : `imagen 8 bits · ${nw} × ${nh} px`, note);
     };
-    im.onerror = () => { URL.revokeObjectURL(url); setGenError("No se pudo leer la imagen."); };
+    im.onerror = () => { URL.revokeObjectURL(url); if (seq === loadSeq) setGenError("No se pudo leer la imagen."); };
     im.src = url;
   }
 
@@ -819,7 +842,8 @@
   });
   $("form").addEventListener("change", (e) => { if (e.target.type === "checkbox" || e.target.tagName === "SELECT") later(); });
   $("form").addEventListener("submit", (e) => e.preventDefault());
-  $("file").addEventListener("change", (e) => loadFile(e.target.files[0]));
+  // se vacia el campo para que elegir otra vez el mismo archivo vuelva a cargarlo
+  $("file").addEventListener("change", (e) => { const f = e.target.files[0]; e.target.value = ""; loadFile(f); });
   const drop = $("drop");
   ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
@@ -842,7 +866,9 @@
     const btn = $("iaBtn"), msg = $("iaMsg");
     btn.disabled = true; msg.hidden = false;
     msg.textContent = "Cargando el modelo de IA (~50 MB, solo la primera vez)…";
-    const canvas = src;
+    const canvas = src, id = srcId, seq = loadSeq;
+    const stale = () => srcId !== id || src !== canvas || loadSeq !== seq;   // se cargo otra fuente mientras tanto
+    setGenError("");
     try {
       const raw = await KreaDepth.estimate(canvas, (fase, pct) => {
         msg.textContent = fase === "descarga"
@@ -854,11 +880,13 @@
       const h2 = Math.max(2, Math.round(w2 * canvas.height / canvas.width));
       const field = { w: w2, h: h2, data: KreaInput.resample(raw, w2, h2) };
       msg.hidden = true;
+      if (stale()) { btn.disabled = false; return; }
       setFieldSource(field, `IA profundidad · ${w2} × ${h2}`,
         "Heightmap generado con IA (Depth Anything) en tu navegador: lo cercano queda alto. " +
         "Si sale al revés, marca «Invertir». Revisa la Vista 3D y, si te gusta, descarga el heightmap de 16 bits para guardarlo o retocarlo.");
     } catch (e) {
       msg.hidden = true;
+      if (stale()) { btn.disabled = false; return; }
       setGenError("No se pudo estimar la profundidad: " + (e && e.message || e) + ". La primera vez se necesita conexión a internet para descargar el modelo.");
     }
     btn.disabled = false;
@@ -890,17 +918,19 @@
   // ejemplo inicial: mural romano como heightmap de 16 bits (muestra el modo profesional);
   // si no se puede cargar, queda el dibujo generado como respaldo
   (async () => {
+    const seq = loadSeq;                 // si el usuario carga un archivo antes, el ejemplo no lo pisa
     try {
       const r = await fetch("ejemplo.png");
       if (!r.ok) throw new Error("sin ejemplo");
       const hm = KreaInput.decodePng16(await r.arrayBuffer());
       if (!hm) throw new Error("ejemplo no es de 16 bits");
+      if (seq !== loadSeq) return;
       setFieldSource(hm, "ejemplo · mural romano",
         "Ejemplo: heightmap de 16 bits de un mural romano, con el ajuste escultórico activado. " +
         "Gira la Vista 3D con el mouse. Carga tu propio archivo para reemplazarlo.");
       setTab("3d");                      // la vista 3D muestra el volumen real
     } catch (e) {
-      setSource(sampleImage(), "ejemplo");
+      if (seq === loadSeq) setSource(sampleImage(), "ejemplo");
     }
   })();
 })();
