@@ -102,7 +102,7 @@ class NK300:
 def HEADER(P, title):
     return [f"({title})",
             "(SIN CAMBIO DE HERRAMIENTA - FRESA PLANA D%s MM - 2 FILOS)" % f"{P['d']:g}",
-            "(USAR PINZA ER DEL DIAMETRO DE LA CANA DE LA FRESA - 1/4 PULGADA = 6.35 MM)",
+            "(PINZA ER DEL MISMO DIAMETRO QUE LA CANA DE LA FRESA)",
             "(CERO: X0 Y0 ESQUINA INFERIOR IZQUIERDA DE LA PLANCHA - Z0 CARA SUPERIOR DEL MDF - G54)",
             "(S Y F CALCULADOS PARA MDF - REVISAR ANTES DE CORRER)",
             "G90 G21 G17 G40 G80",
@@ -152,6 +152,10 @@ def pocket_nk(nc, area, z_top, z_bot, r, allow, P):
         while not cur.is_empty:
             rings.append(cur); cur = cur.buffer(-P["over"], join_style=1)
         seq = [pts for g in reversed(rings) for pts in _rings(g, True)]   # de dentro hacia fuera, antihorario
+        # la rampa de entrada se hace en el primer anillo de al menos 3 diametros de largo (si no, el anillo
+        # minimo seria una helice diminuta, casi una bajada vertical); los anillos interiores se cortan despues
+        k = next((i for i, q in enumerate(seq) if LineString(q).length >= 6 * r), len(seq) - 1)
+        seq = [seq[k]] + seq[:k][::-1] + seq[k + 1:]
         prev = z_top
         for zl in levels:
             first = True

@@ -229,7 +229,7 @@ def ramp_ring(nc, pts, z_from, z_to):
         seg = math.dist(a, b)
         z = max(z_to, z - seg * RAMP)
         nc.feed(b[0], b[1], z); i += 1
-        if i > 50 * n: break
+        if i > 2000 * n: break
     k = i % n
     loop = pts[k:-1] + pts[:k] + [pts[k]]
     for q in loop[1:]: nc.feed(q[0], q[1])
