@@ -47,12 +47,13 @@ El tiempo es el de corte más los desplazamientos rápidos, sin contar las acele
 Para otro diámetro: `python3 logo_nk300.py --fresa D` y después `python3 verificar_nk300.py --fresa D`.
 
 ## Formato NK300
-Esto sale de la investigación del manual de NcStudio y los posts de Weihong:
-- **Cabecera:** `G90 G21 G17 G40 G80` y `G54`.
-- **Arranque:** `G00 Z25` antes de cualquier movimiento en XY, después `M03 S18000` y `M00`, una pausa para comprobar que el husillo gira a régimen. Pulsa marcha para seguir.
-- **Final:** `G00 Z25`, `M05`, `G00 X0 Y0` (esquina de la plancha) y `M30`.
-- **Formato:** texto ASCII con fin de línea CRLF. Los comentarios van en su propia línea. Los números llevan siempre punto decimal (`Z-0.500`, `F2200.0`).
-- **Lo que no se emite:** `%`, `N`, `T`, `M06` (evita el cambio automático), `G43`/`G49`/`H`, `M07`–`M09`, `M71`/`M73`, `G28`, `G53` ni `G04`.
+Se copia el de los `.nc` que **ya funcionan en esta máquina** (`1_desbaste.nc`, `1_acabado.nc`…):
+- **Formato compacto:** sin espacios ni comentarios, con números como `Z2.` o `X-.011`, `G0`/`G1` modales y `F` con punto (`F2200.`).
+- **Inicio:** `G90G21`, `G0Z25.` y `M3S18000`. El primer movimiento en XY ya va a Z25.
+- **Final:** `G0Z25.`, `M5`, `G0X0Y0` y `M2`.
+- **Sin `M00`:** en el NK300 `M00` es una pausa que espera a que pulses marcha. En la primera versión parecía que la máquina solo giraba la fresa y no se movía.
+- **No se usa:** `%`, `N`, `T`, `M06`, `G43`/`G49`/`H`, `M7`–`M9`, `M71`/`M73`, `G28`, `G53` ni `G4`.
+- **Arranque del husillo:** sin pausa, el husillo arranca mientras la máquina sube y va en rápido al primer punto. Si tu NK300 no tiene configurado un retardo de arranque del husillo, espera a que gire antes de que la fresa toque la madera, o enciéndelo a mano antes de empezar, como en tus otros programas.
 
 ## Antes de cortar
 1. **Pinza:** la de 8 mm con la fresa de caña de 8 mm. Mete bien la caña (al menos unos 20 mm dentro de la pinza) y deja fuera solo lo necesario: con 5 mm de profundidad bastan unos 25–30 mm de fresa asomando.

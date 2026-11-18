@@ -47,7 +47,7 @@ class NK300:
         self.x = self.y = self.z = None
         self.t_cut = 0.0; self.d_rapid = 0.0
         for l in HEADER(P, title): self.lines.append(l)
-        self.z = P["safe_z"]; self.st.update(Z="%.3f" % P["safe_z"])   # G sin fijar: el primer movimiento lleva G00
+        self.z = P["safe_z"]; self.st.update(Z=Lg.fnum(P["safe_z"]))   # G sin fijar: el primer movimiento lleva G00
 
     def emit(self, s): self.lines.append(s)
 
@@ -55,20 +55,20 @@ class NK300:
         w = []
         for k, v in (("X", x), ("Y", y), ("Z", z)):
             if v is None: continue
-            fv = f"{v:.3f}"
+            fv = Lg.fnum(v)
             if self.st.get(k) != fv: w.append(k + fv); self.st[k] = fv
         if not w: return
         out = []
         if self.st.get("G") != g: out.append(g); self.st["G"] = g
         out += w
-        if g == "G01" and f and self.st.get("F") != str(int(f)): out.append(f"F{int(f)}.0"); self.st["F"] = str(int(f))
+        if g == "G1" and f and self.st.get("F") != str(int(f)): out.append(f"F{int(f)}."); self.st["F"] = str(int(f))
         nx = self.x if x is None else x; ny = self.y if y is None else y; nz = self.z if z is None else z
         if self.x is not None and self.z is not None:
             d = math.dist((self.x, self.y, self.z), (nx, ny, nz))
-            if g == "G01": self.t_cut += d / f
+            if g == "G1": self.t_cut += d / f
             else: self.d_rapid += d
         self.x, self.y, self.z = nx, ny, nz
-        self.emit(" ".join(out))
+        self.emit("".join(out))
 
     # interfaz que usan pocket()/ramp_ring() de logo.py
     @property
@@ -77,16 +77,16 @@ class NK300:
 
     def travel(self, x, y, z_above):
         if self.x is None:                               # ya esta a la Z de seguridad (cabecera)
-            self._mv("G00", x=x, y=y); return
+            self._mv("G0", x=x, y=y); return
         if abs(self.x - x) < 1e-6 and abs(self.y - y) < 1e-6: return
-        self._mv("G00", z=max(self.P["travel_z"], self.z))
-        self._mv("G00", x=x, y=y)
+        self._mv("G0", z=max(self.P["travel_z"], self.z))
+        self._mv("G0", x=x, y=y)
 
     def feed(self, x, y, z=None):
         f = self.P["plunge"] if (z is not None and self.z is not None and z < self.z - 1e-6) else self.cur_feed
-        self._mv("G01", x, y, z, f)
+        self._mv("G1", x, y, z, f)
 
-    def plunge(self, z): self._mv("G01", z=z, f=self.P["plunge"])
+    def plunge(self, z): self._mv("G1", z=z, f=self.P["plunge"])
 
     def end(self):
         for l in FOOTER(self.P): self.emit(l)
@@ -97,24 +97,16 @@ class NK300:
     def minutes(self): return self.t_cut + self.d_rapid / 10000.0
 
 
-# cabecera y final segun lo investigado del NK300 (README_NK300.md): ASCII, comentarios en linea propia,
-# sin %, sin N, sin G43/G49/H, sin T/M06, sin M71/M73, sin M07-M09, sin G28/G53, sin G04.
+# Formato: el mismo que los .nc que ya funcionan en esta maquina (1_desbaste.nc, 1_acabado.nc...):
+# sin cabecera larga ni comentarios, palabras sin espacios, numeros compactos (Z2., X-.011), G0/G1
+# modales, final con M2. Se anaden solo G90 G21 (pedidos) y el arranque del husillo M3 S. SIN M00:
+# en el NK300 M00 detiene el programa hasta pulsar marcha (parecia que la maquina no hacia nada).
 def HEADER(P, title):
-    return [f"({title})",
-            "(SIN CAMBIO DE HERRAMIENTA - FRESA PLANA D%s MM - 2 FILOS)" % f"{P['d']:g}",
-            "(PINZA ER DEL MISMO DIAMETRO QUE LA CANA DE LA FRESA)",
-            "(CERO: X0 Y0 ESQUINA INFERIOR IZQUIERDA DE LA PLANCHA - Z0 CARA SUPERIOR DEL MDF - G54)",
-            "(S Y F CALCULADOS PARA MDF - REVISAR ANTES DE CORRER)",
-            "G90 G21 G17 G40 G80",
-            "G54",
-            "G00 Z%.3f" % P["safe_z"],
-            "M03 S%d" % P["rpm"],
-            "(PAUSA: COMPROBAR QUE EL HUSILLO GIRA A REGIMEN Y PULSAR MARCHA)",
-            "M00"]
+    return ["G90G21", "G0Z%s" % Lg.fnum(P["safe_z"]), "M3S%d" % P["rpm"]]
 
 
 def FOOTER(P):
-    return ["G00 Z%.3f" % P["safe_z"], "M05", "G00 X0.000 Y0.000", "M30"]
+    return ["G0Z%s" % Lg.fnum(P["safe_z"]), "M5", "G0X0Y0", "M2"]
 
 
 SIMPLIFY = 0.02        # tolerancia al simplificar trayectorias (mm)

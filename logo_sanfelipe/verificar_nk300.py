@@ -28,7 +28,7 @@ keep = {
 }
 r = a.fresa / 2
 TOL = 0.02
-FORBID = re.compile(r"(%|^N\d|\bT\d|M0?6\b|M0?7\b|M0?8\b|M0?9\b|M71|M73|G43|G49|G28|G53|G0?4\b|\bH\d)")
+FORBID = re.compile(r"(%|^N\d|T\d|M0?0(?!\d)|M0?1(?!\d)|M0?6(?!\d)|M0?7(?!\d)|M0?8(?!\d)|M0?9(?!\d)|M71|M73|G43|G49|G28|G53|G0?4(?!\d)|H\d)")
 NUM = re.compile(r"[XYZF](-?\d+\.\d+)")
 
 
@@ -46,15 +46,17 @@ def parse(path):
         if "(" in l: issues.append("comentario detras de codigo: " + l)
         body = l
         if FORBID.search(body): issues.append("codigo no permitido: " + l)
+        # formato compacto como los .nc que ya funcionan en la maquina: Z2. / X-.011 / X0, sin espacios
+        if " " in body: issues.append("espacio en: " + l)
         for w in re.findall(r"[XYZF]-?[\d.]+", body):
-            if not re.fullmatch(r"[XYZF]-?\d+\.\d+", w): issues.append(f"numero sin cero/punto: {w} en {l}")
-    exp_head = ["G90 G21 G17 G40 G80", "G54", f"G00 Z{N.cut_params(a.fresa)['safe_z']:.3f}"]
-    if code[:3] != exp_head: issues.append(f"cabecera {code[:3]}")
-    if not (code[3].startswith("M03 S") and code[4] == "M00"): issues.append("M03/M00")
-    if code[-4:] != [f"G00 Z{N.cut_params(a.fresa)['safe_z']:.3f}", "M05", "G00 X0.000 Y0.000", "M30"]: issues.append(f"final {code[-4:]}")
+            if not re.fullmatch(r"[XYZF](0|-?\d*\.\d*)", w) or re.fullmatch(r"[XYZF]-?\.", w): issues.append(f"numero raro: {w} en {l}")
+    sz = Lg.fnum(N.cut_params(a.fresa)["safe_z"])
+    if code[:3] != ["G90G21", f"G0Z{sz}", f"M3S{N.cut_params(a.fresa)['rpm']}"]: issues.append(f"cabecera {code[:3]}")
+    if not code[3].startswith("G0X"): issues.append(f"primer movimiento {code[3]}")
+    if code[-4:] != [f"G0Z{sz}", "M5", "G0X0Y0", "M2"]: issues.append(f"final {code[-4:]}")
     p = {"X": None, "Y": None, "Z": None}; g = None; moves = []
     for l in code:
-        m = re.match(r"G0([01])\b", l)
+        m = re.match(r"G([01])(?!\d)", l)
         if m: g = m.group(1)
         new = dict(p)
         for k in "XYZ":

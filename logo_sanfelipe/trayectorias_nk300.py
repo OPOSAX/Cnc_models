@@ -11,7 +11,7 @@ for ax, (name, title) in zip(axs, ((f"logo_1_desbaste_plana{d:g}.nc", "1 Desbast
     for l in open(os.path.join(here, "nc_nk300", name)).read().split("\n"):
         l = l.strip()
         if not l or l.startswith("("): continue
-        m = re.match(r"G0([01])\b", l)
+        m = re.match(r"G([01])(?!\d)", l)
         if m: g = m.group(1)
         new = dict(p)
         for k in "XYZ":
