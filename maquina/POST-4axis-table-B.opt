@@ -1,0 +1,432 @@
+machine fanuc15m
+
+#################################################
+# Company   - 					#
+# Machine   - GENERIC				#
+# Control   - FANUC18MB				#
+#						#
+# Axis Configuration Code : 5202		#
+#                  ---------------		#
+#			| HEAD  | TABLE |	#
+#  ---------------|-------|-------|		#
+# |    A axis	|   -	  |   X   |		#
+# |---------------|-------|-------|		#
+# |    B axis	|   -	  |   y   |		#
+# |---------------|-------|-------|		#
+# |    C axis	|   -	  |   -   |		#
+#  -------------------------------		#
+#						#
+# Metric output 			|  1  |	#
+# Absolute output 		|  1  |		#
+# Cutter Compensation 		|  1  |		#
+# Drilling cycles 	 	|  1  |		#
+# Drilling cycles 200 series	|  0  |		#
+# Parameterised feedrates 	|  0  |		#
+# Inverse time feedrates 	|  0  |		#
+# RTCP 				|  0  |		#
+# Active Working Plane		|  0  |		#
+# Connection moves enabled	|  1  |		#
+# Spline machining		|  0  |		#
+# 						#
+#################################################
+#
+#
+# Created by	- wang - 21.08.2012 
+#
+#
+#
+#38
+  define word %D
+    address letter = "( Date : "
+    address width  = 9
+    field width    = 2
+  end define
+#44
+  define word %M
+    address letter = "."
+    address width  = 1
+    field width    = 2
+  end define
+#50
+  define word %Y
+    address letter = "."
+    address width  = 1
+    field width    = 2
+  end define
+#56
+  define word %h
+    address letter = " - "
+    address width  = 3
+    field width    = 2
+  end define
+#62
+  define word %m
+    address letter = ":"
+    address width  = 1
+    field width    = 2
+    decimal places = 0
+    decimal point  = false
+  end define
+#70
+  define word %s
+    address letter = ":"
+    address width  = 1
+    field width    = 2
+  end define
+#76
+  define word TPN
+    address letter = "( TOOLPATH - "
+    address width  = 13
+    field width    = 20
+  end define
+#82
+  define word TNO 
+    address letter = "( TOOL NO."
+    address width  = 10
+    field width    = 3
+    decimal places = 0
+    decimal point  = false
+    leading zeros  = false
+    trailing zeros = false
+  end define
+#92
+  define word TN 
+    address letter = "( TOOL ID   : "
+    address width  = 14
+    field width    = 30
+  end define
+#98
+  define word TT
+    address letter = "( TOOL TYPE : "
+    address width  = 14
+    field width    = 32
+    decimal places = 0
+    decimal point  = false
+    leading zeros  = false
+    trailing zeros = false
+  end define
+#108
+  define word TD
+    address letter = "( TOOL DIA. "
+    address width  = 12
+    field width    = 8
+    scale factor   = 2
+    decimal places = 3
+    decimal point  = true
+    leading zeros  = false
+    trailing zeros = false
+  end define
+#119
+  define word TR
+    address letter = " TIP RAD "
+    address width  = 9
+    scale factor   = 1
+    field width    = 8
+    decimal places = 3
+    decimal point  = true
+    leading zeros  = false
+    trailing zeros = false
+  end define
+#130
+  define word TLH
+    address letter = " LENGTH "
+    address width  = 8
+    scale factor   = 1
+    field width    = 8
+    decimal places = 3
+    decimal point  = true
+    leading zeros  = false
+    trailing zeros = false
+  end define
+#141
+  define word TOL
+    address letter = "( Tolerance = "
+    address width  = 14
+    field width    = 5
+    decimal places = 3
+    decimal point  = true
+    leading zeros  = false
+    trailing zeros = false
+  end define
+#151
+  define word THK
+    address letter = "( Allowance = "
+    address width  = 14
+    field width    = 7
+    decimal places = 3
+    scale factor   = 1
+    decimal point  = true
+    leading zeros  = false
+    trailing zeros = true
+    sign           = always
+  end define
+#163
+  define word VER
+    address letter = "( DP Version : "
+    address width  = 15
+    field width    = 4
+    tape position  = 1
+  end define
+#170
+  define word OFN
+    address letter = "  Option File : "
+    address width  = 16
+    field width    = 32
+    tape position  = 0
+  end define
+#177
+  define word M3
+    address letter  = "M"
+    address width   = 1
+    field width     = 3
+    tape position   = 1
+  end define
+#184
+  define word DW
+    address letter = "P"
+    address width  = 1
+    metric formats
+    scale factor    = 100
+    decimal places  = 0
+    decimal point = false
+    trailing zeros = true
+    tape position   = 1
+  end define
+#195
+  define format ( ID )
+    address letter = "O"
+    field width    = 4
+  end define
+#200
+  define format ( G4 H )
+    leading zeros  = true
+  end define
+#204
+  define format ( P )
+    field width   = 4
+    leading zeros = true
+  end define
+#206
+  define format ( N )
+    permanent
+   end define
+#209
+  define format ( A B C )
+    field width    = 9
+    decimal places = 3
+    decimal point  = true
+    leading zeros  = false
+    trailing zeros = false
+    sign           = if negative
+    modal
+  end define
+#219
+  define format ( H M1 )
+    modal
+  end define
+#223
+  word order = ( N )
+#225
+  define keys
+    drill peck depth = Q1
+    drill hole depth = Z2
+    clearplane       = R2
+    cycle dwell      = DW
+    azimuth axis     not used
+    elevation axis   = B
+    spindle          not used
+  end define
+#235
+  define codes
+    cycle retract    = G6 98
+    drill            = G4 82
+    break chip       = G4 83
+    deep drill       = G4 83
+    tap              = G4 84
+    bore 1           = G4 85
+    bore 2           = G4 76
+    coolant on mist  = M2 51
+  end define
+#246
+  message output         = false
+  block order            = true
+  tool reset coordinates = 3
+  counter start          = 1
+  counter increment      = 1
+  integer 69             = 2
+  maximum feedrate = 99999.0
+  block start            = 1
+  block increment        = 1
+  maximum block number   = 99999999999
+#254
+  spindle azimuth rotation   = false
+  azimuth axis units         = degrees
+  azimuth axis direction     = positive
+  azimuth centre             = ( 0  0  0 )
+  azimuth axis parameters    = ( 0.0 0.0 0.0  0 0 0)
+
+  spindle elevation rotation = false
+  elevation axis units       = degrees
+  elevation axis direction   = positive
+  elevation centre           = ( 0  0  0 )
+  elevation axis parameters  = ( 0.0 0.0 0.0  0 1 0)
+#
+  pcs origin                 = ( 0  0  0  0  0  0 )
+  linear axis limits         = ( -99999.0 99999.0 -99999.0 99999.0 -99999.0 99999.0 )
+  rotary axis limits         = (   -0.  0.  -99999999.0 99999999.0 0.05  1 )
+#
+  initial tool vector            = ( 0 0 1 )
+#
+  #   workplane angles               = machine tool
+     
+     
+# workplane origin shift = false 
+# retract and reconfigure style = none  linearise combine 
+   #   expand helical drilling cycles = true 
+# contact point based feedrate = true  
+
+
+     workplane angles               =    none
+  retract at angular limit       = true
+  unwind at tool change          = true
+  multiaxis coordinate transform = true
+  linearise multiaxis moves      = true
+  withdrawal amount              = 100.0
+  integer 3                      = 1
+#279
+  define block tape start
+    "%"
+    N ; %D Day ; %M Month ; %Y Year ; %h Hour ; %m Minutes ; %s Seconds ; " )"
+    if ( DPversion < 1400 )
+      error " MINIMUM DUCTPOST VERSION REQUIRED = 1400"
+    end if
+    N ; VER DPversion ; OFN OptionFileName ; " )"
+    N ; G2 40 ; G3 17 ; G4 80 ; G6 49 ; G5 90
+
+  if ( ToolPath5axis )
+     else
+       N ; "M71 "
+  N ; "M73 "
+     end if
+   end define
+ 
+#290
+  define block tool change first
+    N ; TT ToolType ; " )"
+    N ; TN ToolName ; " )"
+    if ( ToolType = "BALLNOSED" or ToolType = "ENDMILL" or ToolType = "DRILL" )
+      N ; TD ToolRadius[ToolNum] ; TLH ToolLength[ToolNum] ; " )"
+    else
+      N ; TD ToolRadius[ToolNum] ; TR TipRadius[ToolNum] ; TLH ToolLength[ToolNum] ; " )"
+    end if
+    N ; change tool ; T ToolNum 
+    N ; S toolSpeed[ToolNum] ; spindle on cw
+    N ; rapid =C ; G4 54 =C ; x coord FromX =C ; y coord FromY =C
+    N ; G6 43 ;  "H1" 
+    N ; abs data =C ;
+  end define
+#305
+  define block tool change
+    N ; TT ToolType ; " )"
+    N ; TN ToolName ; " )"
+    if ( ToolType = "BALLNOSED" or ToolType = "ENDMILL" or ToolType = "DRILL" )
+      N ; TD ToolRadius[ToolNum] ; TLH ToolLength[ToolNum] ; " )"
+    else
+      N ; TD ToolRadius[ToolNum] ; TR TipRadius[ToolNum] ; TLH ToolLength[ToolNum] ; " )"
+    end if
+    N ; change tool ; T ToolNum 
+    N ; S toolSpeed[ToolNum] ; spindle on cw
+    N ; rapid =C ; G4 54 =C ; x coord FromX =C ; y coord FromY =C
+    N ; G6 43 ;  "H1" 
+    N ; abs data =C ;
+  end define
+#320
+  define block move from
+    N ; 
+  end define
+#324
+  define block cldat 1094
+    set swa
+    set swb
+  end define
+#329
+  define block move rapid
+    if ( swa )
+      N ; "( ======== )"
+      N ; TPN ToolPathName ; " )"
+      N ; "( ======== )"
+      unset swa
+    else
+      N ; G1 ; G2 ; G4 ; G5 ; x coord ; y coord ; z coord ; 
+          B ; spindle ; M1 ; M2
+    end if
+  end define
+#341
+  define block move linear
+    if ( swa )
+      unset swa
+      N ; "( ======== )"
+      N ; TPN ToolPathName ; " )"
+      N ; "( ======== )"
+    end if
+    if ( swb ) 
+      N ; G1 =C ; G2 ; G5 ; x coord =C ; y coord =C ; z coord =C ; 
+          azimuth axis =C ; elevation axis =C ; spindle ; feedrate =C ; M1 ; M2 
+      unset swb
+    else
+      N ; G1 ; G2 ; G5 ; x coord ; y coord ; z coord ; 
+          B ; spindle ; feedrate ; M1 ; M2 
+    end if
+  end define
+#358
+  define block cycle start
+    if ( cycle = 1 and cycledwell = 0)
+      # G82 DRILL
+      N ; G4 ; G5 ; G6 ; drill hole depth ; clearplane ; feedrate
+    end if
+    if ( cycle = 1 and cycledwell > 0 )
+      # G82 DRILL AND DWELL
+      N ; G4 ; G5 ; G6 ; drill hole depth ; clearplane ; DW cycledwell ; feedrate
+    end if
+    if ( cycle = 2 or cycle = 3 or cycle = 5 )
+      # DRILL 
+      N ; G4 ; G5 ; G6 ; drill hole depth ; clearplane ; drill peck depth ; 
+          DW cycledwell ; feedrate
+    end if
+    if ( cycle = 4 )
+      # TAP
+      N ; M1 29 ; S ToolSpeed =C ; M2 3 =C
+      N ; G4 ; G5 ; G6 ; drill hole depth ; clearplane ; feedrate
+    end if
+    if ( cycle = 6 )
+      # Bore 
+      N ; G4 ; G5 ; G6 ; drill hole depth ; clearplane ; Q1 300 =C ; feedrate
+    end if
+  end define 
+#383
+  define block move cycle
+    N ; x coord ; y coord ; z coord ; feedrate
+  end define
+#387
+  define block move tap
+    N ; x coord ; y coord ; z coord ; feedrate
+  end define
+#391
+  define block cycle end
+    if ( cycledwell = 0 )
+      N ; G4 80 ; M2 9 ; M3 59
+    end if
+    if ( cycledwell > 0 )
+      N ; G4 05 =C ; " P0"
+    end if
+  end define
+#400
+  define block tape end
+    N ; G5 91 ; G6 28 ; z coord 0 =C
+   N ; "M05 "
+  N ; "M08 "
+    N ; M1 30
+    "%"
+  end define
+
+end
