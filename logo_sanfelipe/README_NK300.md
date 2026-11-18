@@ -58,7 +58,7 @@ Se copia el de los `.nc` que **ya funcionan en esta máquina** (`1_desbaste.nc`,
 ## Antes de cortar
 1. **Pinza:** la de 8 mm con la fresa de caña de 8 mm. Mete bien la caña (al menos unos 20 mm dentro de la pinza) y deja fuera solo lo necesario: con 5 mm de profundidad bastan unos 25–30 mm de fresa asomando.
 2. **Plancha:** fíjala bien. Con vacío o bridas fuera de la zona X 0…660, Y 0…810.
-3. **Cero:** X0 Y0 en la esquina inferior izquierda de la plancha. Z0 tocando la cara de arriba con esta misma fresa, en **G54**.
+3. **Cero:** X0 Y0 en la esquina inferior izquierda de la plancha. Z0 tocando la cara de arriba con esta misma fresa. Fíjalo como en tus otros programas: el NC no cambia de sistema de coordenadas (no lleva G54).
 4. **Simulación:** carga el NC en NcStudio y revisa la simulación o el trazado.
 5. **Pasada en el aire:** desplaza el cero Z unos 25 mm hacia arriba y corre el programa 1.
 6. **Corte:** corre el **1** y después el **2**, sin tocar la fresa ni el cero.
@@ -66,7 +66,7 @@ Se copia el de los `.nc` que **ya funcionan en esta máquina** (`1_desbaste.nc`,
 ## Verificación hecha
 `verificar_nk300.py`:
 - **Formato:** ASCII, CRLF, ningún código prohibido, números con punto, cabecera y final seguros.
-- **Desplazamientos:** ningún `G00` en XY por debajo de Z1 y todo dentro de la plancha.
+- **Desplazamientos:** ningún `G0` en XY por debajo de Z1 y todo dentro de la plancha.
 - **Profundidad:** la Z mínima es -5.
 - **Cortes de más:** comprobación exacta con la fresa plana real (shapely) de que no se corta fuera del diseño.
 
