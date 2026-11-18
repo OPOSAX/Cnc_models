@@ -185,11 +185,37 @@ def finish_walls(nc, area, z_top, z_bot, r, P):
             nc.travel(nc.x, nc.y, P["travel_z"])
 
 
+ORIGIN = "esquina"     # "esquina": X0Y0 = esquina inf. izq. de la plancha; "centro": X0Y0 = centro de la plancha
+
+
+def sheet_box():
+    """La plancha en coordenadas del programa."""
+    W, H = SHEET
+    return box(-W / 2, -H / 2, W / 2, H / 2) if ORIGIN == "centro" else box(0, 0, W, H)
+
+
+def regions_nk():
+    """Regiones del logo en coordenadas del programa. Con ORIGIN='centro' el logo queda centrado en la
+    plancha y X0 Y0 es el centro de la plancha (y del logo)."""
+    from shapely import affinity
+    Lg.WIDTH, Lg.MARGIN = LOGO_W, CORNER
+    R, piece, s = Lg.regions()
+    if ORIGIN == "centro":
+        x0, y0, x1, y1 = piece.bounds            # logo + margen CORNER por cada lado
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        R = {k: affinity.translate(v, -cx, -cy) for k, v in R.items()}
+        piece = affinity.translate(piece, -cx, -cy)
+    return R, piece, s
+
+
+def suffix():
+    return "_centro" if ORIGIN == "centro" else ""
+
+
 def build(d):
     P = cut_params(d); r = d / 2
-    Lg.WIDTH, Lg.MARGIN = LOGO_W, CORNER
     Lg.TRAVEL_Z = P["travel_z"]; Lg.RAMP = P["ramp"]
-    R, piece, s = Lg.regions()
+    R, piece, s = regions_nk()
     jobs = [("verde", 0.0, -DEPTH["verde"]), ("cielo", -DEPTH["verde"], -DEPTH["cielo"]),
             ("letras", 0.0, -DEPTH["letras"]), ("barra", 0.0, -DEPTH["barra"])]
     out = {}
@@ -197,17 +223,19 @@ def build(d):
     n1.cur_feed = P["feed"]
     for n, zt, zb in jobs:
         pocket_nk(n1, R[n], zt, zb, r, ALLOW_WALL, P)
-    out[f"logo_1_desbaste_plana{d:g}.nc"] = n1
+    out[f"logo_1_desbaste_plana{d:g}{suffix()}.nc"] = n1
     n2 = NK300(P, f"Logo San Felipe - ACABADO paredes - fresa plana D{d:g} - misma fresa, mismo cero")
     n2.cur_feed = P["finish_feed"]
     for n, zt, zb in jobs:
         finish_walls(n2, R[n], zt, zb, r, P)
-    out[f"logo_2_acabado_plana{d:g}.nc"] = n2
+    out[f"logo_2_acabado_plana{d:g}{suffix()}.nc"] = n2
     return out, R, piece, P
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser(); ap.add_argument("--fresa", type=float, required=True); a = ap.parse_args()
+    ap = argparse.ArgumentParser(); ap.add_argument("--fresa", type=float, required=True)
+    ap.add_argument("--cero", choices=["esquina", "centro"], default="esquina"); a = ap.parse_args()
+    ORIGIN = a.cero
     out, R, piece, P = build(a.fresa)
     os.makedirs(os.path.join(Lg.HERE, "nc_nk300"), exist_ok=True)
     for name, w in out.items():

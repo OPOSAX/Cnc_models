@@ -15,11 +15,13 @@ from shapely.ops import unary_union
 from shapely.prepared import prep
 import logo as Lg, logo_nk300 as N
 
-ap = argparse.ArgumentParser(); ap.add_argument("--fresa", type=float, required=True); a = ap.parse_args()
-Lg.WIDTH, Lg.MARGIN = N.LOGO_W, N.CORNER
-R, piece, s = Lg.regions()
+ap = argparse.ArgumentParser(); ap.add_argument("--fresa", type=float, required=True)
+ap.add_argument("--cero", choices=["esquina", "centro"], default="esquina"); a = ap.parse_args()
+N.ORIGIN = a.cero
+R, piece, s = N.regions_nk()
 D = N.DEPTH
-sheet = box(0, 0, *N.SHEET)
+sheet = N.sheet_box()
+SX0, SY0, SX1, SY1 = sheet.bounds
 keep = {
     0.0: sheet.difference(unary_union([R["verde"], R["letras"], R["barra"]])),
     -D["barra"]: sheet.difference(unary_union([R["verde"], R["letras"]])),
@@ -77,7 +79,7 @@ def check(path):
     for g, A, B in moves:
         zmin = min(zmin, B[2])
         for P_ in (A, B):
-            if not (r - 1e-6 <= P_[0] <= N.SHEET[0] - r + 1e-6 and r - 1e-6 <= P_[1] <= N.SHEET[1] - r + 1e-6) and P_[2] < 1:
+            if not (SX0 + r - 1e-6 <= P_[0] <= SX1 - r + 1e-6 and SY0 + r - 1e-6 <= P_[1] <= SY1 - r + 1e-6) and P_[2] < 1:
                 issues.append(f"fuera de la plancha {P_}")
         if g == "0":
             if (A[0], A[1]) != (B[0], B[1]) and min(A[2], B[2]) < 1.0: issues.append(f"G00 en XY bajo Z1: {A}->{B}")
@@ -124,8 +126,8 @@ def simulate(all_moves, res=0.5):
 if __name__ == "__main__":
     nd = os.path.join(Lg.HERE, "nc_nk300")
     d = a.fresa
-    m1, ok1 = check(os.path.join(nd, f"logo_1_desbaste_plana{d:g}.nc"))
-    m2, ok2 = check(os.path.join(nd, f"logo_2_acabado_plana{d:g}.nc"))
+    m1, ok1 = check(os.path.join(nd, f"logo_1_desbaste_plana{d:g}{N.suffix()}.nc"))
+    m2, ok2 = check(os.path.join(nd, f"logo_2_acabado_plana{d:g}{N.suffix()}.nc"))
     print("TODO OK" if ok1 and ok2 else "HAY PROBLEMAS")
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     from matplotlib.colors import LightSource
