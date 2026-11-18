@@ -21,12 +21,18 @@ for ax, name in zip(axs, ("prueba_1_aire.nc", "prueba_2_grabado.nc")):
             m = re.search(k + r"(-?[\d.]+)", ln)
             if m: new[k] = float(m.group(1))
         if new == p: continue
-        assert p["Z"] is not None or (new["X"], new["Y"]) == (p["X"], p["Y"]), "XY antes de subir Z"
+        # antes de la primera Z solo se permite el G0 G54 X.. Y.. del post (la maquina esta arriba)
+        assert p["Z"] is not None or ("G54" in ln and new["Z"] is None) or (new["X"], new["Y"]) == (p["X"], p["Y"]), "XY sin Z conocida"
+        if p["Z"] is None and new["Z"] is None:
+            assert "G43 H1" not in txt.split(ln)[0], "G43 despues"; p = new; continue
         if g == "0" and (new["X"], new["Y"]) != (p["X"], p["Y"]) and new["Z"] < 9.99: safe_ok = False
         zmin = min(zmin, new["Z"])
         if p["Z"] is not None:
             ax.plot([p["X"], new["X"]], [p["Y"], new["Y"]], color="red" if g == "1" else "0.75", lw=1.6 if g == "1" else 0.7)
         p = new
+    head = txt.split("\r\n")[:8]
+    assert [l.split(" ", 1)[1] for l in head[:4]] == ["G40 G17 G80 G49 G90", "M71", "M73", "S18000 M3"], head
+    assert head[4].split(" ", 1)[1].startswith("G0 G54 X") and head[5].endswith("G43 H1") and head[6].endswith("G90") and " Z" in head[7], head
     print(f"{name}: Z minima {zmin}, desplazamientos rapidos en XY por encima de Z10: {safe_ok}")
     ax.set_title(f"{name}  (Z minima {zmin:g} mm)")
     ax.set_aspect("equal"); ax.grid(alpha=.3); ax.set_xlim(-8, 125); ax.set_ylim(-8, 100)

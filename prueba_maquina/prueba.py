@@ -8,9 +8,11 @@ para comprobar recorridos, sentido de los ejes, escala (medir el marco: 100 x 80
 los circulos salen redondos.
 
 Origen: X0 Y0 = esquina inferior izquierda del dibujo, Z0 = cara superior del tablero (G54).
-Formato: el del ejemplo del fabricante (rough-1.nc) y su post de PowerMill
-(maquina/POST-4axis-table-B.opt): N, G54, codigo modal, sin comentarios ni arcos,
-final G53 Z0 / M05 / M30 / %.  Uso: python3 prueba.py
+Formato: el del post de PowerMill del fabricante (maquina/POST-4axis-table-B.opt) y su ejemplo
+rough-1.nc: N, G40 G17 G80 G49 G90, M71, M73, S.. M3, G0 G54 X.. Y.., G43 H1, G90, codigo modal,
+sin comentarios ni arcos, final G53 Z0 / M05 / M30 / %.  Uso: python3 prueba.py
+G43 H1 activa la compensacion de largo de la herramienta 1: el valor H1 de la maquina tiene que
+corresponder a como se fijo Z0 (ver README).
 """
 import math, os
 
@@ -52,7 +54,7 @@ class Writer:
                 words.append(k + fv); self.st[k] = fv
         if not words: return
         out = []
-        if self.first:                       # primer movimiento: G0 G54 y SOLO Z (sube antes de moverse en XY)
+        if self.first:                       # primer movimiento: G0 G54 X.. Y.. como en el post
             out += ["G0", "G54"]; self.st["G"] = "G0"; self.first = False
         elif self.st.get("G") != f"G{g}":
             out.append(f"G{g}"); self.st["G"] = f"G{g}"
@@ -85,9 +87,17 @@ def drawing():
 
 def program(z_cut):
     w = Writer()
-    w("G90")
+    w("G40 G17 G80 G49 G90")                                 # inicio del post (tape start)
+    w("M71")
+    w("M73")
     w(f"S{SPINDLE} M3")
-    w.move(0, z=SAFE_Z + (AIR if z_cut > 0 else 0))          # primero sube (o confirma) la Z de seguridad
+    x0, y0 = drawing()[0][0]
+    # como el post: XY a la altura a la que este la maquina (arriba, tras G53 Z0 o el home),
+    # luego G43 H1 y G90; la primera Z ya va con la compensacion de largo activa
+    w.move(0, x=x0, y=y0)
+    w("G43 H1")
+    w("G90")
+    w.move(0, z=SAFE_Z + (AIR if z_cut > 0 else 0))
     safe = w.z
     for pts in drawing():
         x0, y0 = pts[0]

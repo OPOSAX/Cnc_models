@@ -11,4 +11,4 @@
 ## Qué nos dice
 El ejemplo `rough-1.nc` del fabricante es la salida de este post **con las primeras líneas quitadas**: empieza en `N11 S1500 M3` y `N12 G0 G54 X… Y…`. Los números que faltan (N13, N17) son líneas borradas, como `G43 H1` y los comentarios. Además termina en `G53 Z0` en vez de `G91 G28 Z0`.
 
-Por eso los `.nc` de este repositorio, tanto la lámpara como Krea3D y la prueba, siguen el formato de `rough-1.nc`, que es lo que la máquina ya ha ejecutado. El post completo trae además `M71/M73`, `G43 H1` y `M08` al final, cuyo uso en esta máquina no está confirmado.
+Los `.nc` de la lámpara y de Krea3D siguen el formato de `rough-1.nc`, que es lo que la máquina ya ha ejecutado. El programa de prueba (`../prueba_maquina`) añade además el inicio del post: `G40 G17 G80 G49 G90`, `M71`, `M73` y `G43 H1`. El `M08` del final del post no se usa.
